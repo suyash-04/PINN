@@ -1,0 +1,11 @@
+artifacts_root : artifacts
+
+data_ingestion:
+  root: artifacts/dataset
+  raw_data_file: dataset/Nod_Inf.out
+  ingested_data: artifacts/dataset/final_data.csv
+  batch_path: artifacts/dataset/data_batch.pt
+
+model_training:
+  root: artifacts/model
+  model_path: artifacts/model/pinn_model.pt

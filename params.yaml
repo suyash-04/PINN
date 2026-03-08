@@ -1,0 +1,35 @@
+architecture:
+    n_hidden_layers: 7
+    neurons_per_layer: 64
+    activation: tanh
+    input_dim : 2
+    output_dim : 1
+
+
+
+geo_params:
+  Ks: 1.5e-5          # Saturated hydraulic conductivity (m/s) — phyllite-schist
+  theta_s: 0.45       # Saturated water content
+  theta_r: 0.05       # Residual water content
+  alpha: 0.8          # van Genuchten alpha (1/m)
+  n: 1.4              # Pore-size distribution index
+  l: 0.5              # Tortuosity / connectivity
+  c_prime: 5.0        # Effective cohesion (kPa)
+  phi_prime: 28.0     # Effective friction angle (degrees)
+  gamma: 20.0         # Bulk unit weight (kN/m3)
+  beta: 42.0          # Slope angle (degrees)       # Failure plane depth (m)
+  gamma_w: 9.81       # Unit weight of water (kN/m3)
+
+
+loss_weights:
+  lambda_physics: 1.0
+  lambda_anchor: 10.0
+  lambda_initial: 5.0
+  lambda_boundary: 5.0
+  lambda_failure: 20.0
+
+
+training:
+  epochs: 5000
+  learning_rate: 0.001
+  device: cpu
