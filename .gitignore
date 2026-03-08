@@ -1,4 +1,7 @@
+<<<<<<< HEAD
 logs
+=======
+>>>>>>> 00bef9ce4f14c9c3d3b914f1e35de3e4621e8e99
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
