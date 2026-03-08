@@ -59,7 +59,8 @@ class ConfigurationManager():
         t = self.params['training']
         logger.info(f"Training Config loaded: {t}")
         return TrainingConfig(
-            epochs=t['epochs'],
+            adam_epochs=t['adam_epochs'],
+            lbfgs_epochs=t['lbfgs_epochs'],
             learning_rate=t['learning_rate'],
             device=t['device']
         )

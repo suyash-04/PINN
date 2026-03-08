@@ -30,6 +30,7 @@ loss_weights:
 
 
 training:
-  epochs: 5000
   learning_rate: 0.001
+  adam_epochs: 10000
+  lbfgs_epochs: 5000
   device: cpu

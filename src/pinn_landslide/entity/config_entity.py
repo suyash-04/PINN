@@ -33,8 +33,10 @@ class GeoParamsConfig:
     beta: float        # Slope angle (degrees)
     gamma_w:float
 @dataclass(frozen=True)
+
 class TrainingConfig:
-    epochs: int
+    adam_epochs: int
+    lbfgs_epochs: int
     learning_rate: float
     device: str
 
