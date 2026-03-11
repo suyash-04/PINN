@@ -6,5 +6,5 @@ pyyaml>=6.0
 scipy>=1.10.0
 matplotlib>=3.7.1
 ensure
-box
-yaml
+python-box
+# yaml is provided by pyyaml above

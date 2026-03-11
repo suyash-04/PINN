@@ -1,0 +1,182 @@
+/* ── PINN Landslide Dashboard – Light Theme ──────────────────────── */
+
+/* Hide default Streamlit branding */
+footer {visibility: hidden;}
+
+/* Sidebar styling */
+[data-testid="stSidebar"] {
+    background: linear-gradient(180deg, #f8fafc 0%, #e2e8f0 100%);
+    border-right: 1px solid #cbd5e1;
+}
+
+[data-testid="stSidebar"] .stMarkdown h2,
+[data-testid="stSidebar"] .stMarkdown h3 {
+    color: #1e40af !important;
+}
+
+[data-testid="stSidebar"] .stMarkdown p,
+[data-testid="stSidebar"] .stMarkdown label {
+    color: #475569 !important;
+}
+
+/* Sidebar section headers */
+.sidebar-section {
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #64748b;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    padding: 0.5rem 0 0.25rem 0;
+    margin-top: 0.5rem;
+    border-bottom: 1px solid #cbd5e1;
+}
+
+/* Sidebar nav buttons */
+.nav-btn > button {
+    width: 100%;
+    text-align: left !important;
+    justify-content: flex-start !important;
+    background-color: transparent !important;
+    color: #334155 !important;
+    border: none !important;
+    border-radius: 8px !important;
+    padding: 0.45rem 0.75rem !important;
+    font-size: 0.9rem !important;
+    font-weight: 500 !important;
+    transition: all 0.15s ease !important;
+}
+
+.nav-btn > button:hover {
+    background-color: #e2e8f0 !important;
+    color: #1e40af !important;
+}
+
+.nav-btn-active > button {
+    width: 100%;
+    text-align: left !important;
+    justify-content: flex-start !important;
+    background-color: #2563eb !important;
+    color: #ffffff !important;
+    border: none !important;
+    border-radius: 8px !important;
+    padding: 0.45rem 0.75rem !important;
+    font-size: 0.9rem !important;
+    font-weight: 600 !important;
+}
+
+.nav-btn-active > button:hover {
+    background-color: #1d4ed8 !important;
+    color: #ffffff !important;
+}
+
+/* Metric card styling */
+[data-testid="stMetric"] {
+    background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 16px 20px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+}
+
+[data-testid="stMetric"] label {
+    color: #64748b !important;
+    font-size: 0.85rem !important;
+    font-weight: 500 !important;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+[data-testid="stMetric"] [data-testid="stMetricValue"] {
+    color: #1e293b !important;
+    font-size: 1.8rem !important;
+    font-weight: 700 !important;
+}
+
+/* Tab styling */
+.stTabs [data-baseweb="tab-list"] {
+    gap: 8px;
+}
+
+.stTabs [data-baseweb="tab"] {
+    border-radius: 8px 8px 0 0;
+    padding: 10px 24px;
+    font-weight: 600;
+}
+
+/* Expander styling */
+.streamlit-expanderHeader {
+    font-weight: 600;
+    color: #1e293b;
+    background-color: #f1f5f9;
+    border-radius: 8px;
+}
+
+/* Info/Warning boxes */
+.stAlert {
+    border-radius: 8px;
+}
+
+/* Plotly chart containers */
+.stPlotlyChart {
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+/* Horizontal rule */
+hr {
+    border: none;
+    border-top: 1px solid #e2e8f0;
+    margin: 1.5rem 0;
+}
+
+/* Custom header banner */
+.header-banner {
+    background: linear-gradient(135deg, #1e40af 0%, #1e3a8a 50%, #1e3a5f 100%);
+    padding: 2rem 2.5rem;
+    border-radius: 16px;
+    margin-bottom: 1.5rem;
+    border: 1px solid #3b82f6;
+}
+
+.header-banner h1 {
+    color: #f0f9ff !important;
+    font-size: 2rem !important;
+    margin-bottom: 0.25rem !important;
+}
+
+.header-banner p {
+    color: #93c5fd !important;
+    font-size: 1rem !important;
+    margin: 0 !important;
+}
+
+/* Page selector cards */
+.page-card {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 1.25rem;
+    transition: all 0.2s ease;
+}
+
+.page-card:hover {
+    border-color: #2563eb;
+    box-shadow: 0 0 12px rgba(37, 99, 235, 0.12);
+}
+
+/* FS status colors */
+.fs-safe { color: #16a34a !important; font-weight: 700; }
+.fs-marginal { color: #d97706 !important; font-weight: 700; }
+.fs-critical { color: #dc2626 !important; font-weight: 700; }
+
+/* Tooltip styling */
+.tooltip-text {
+    font-size: 0.8rem;
+    color: #64748b;
+    font-style: italic;
+}
+
+/* Slider styling */
+.stSlider > div > div > div {
+    color: #2563eb;
+}
