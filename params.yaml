@@ -22,15 +22,14 @@ geo_params:
 
 
 loss_weights:
-  lambda_physics: 1.0
-  lambda_anchor: 10.0
-  lambda_initial: 5.0
-  lambda_boundary: 5.0
-  lambda_failure: 20.0
-
+  lambda_physics:  1000000.0   # 1e6 — brings physics to same scale as anchor
+  lambda_anchor:   10.0        # keep — your ground truth, do not reduce
+  lambda_initial:  10.0        # raise from 5 to 10 — IC as important as anchor
+  lambda_boundary: 1.0         # lower from 5 to 1 — placeholder flux not reliable
+  lambda_failure:  20.0        # keep — your primary validation target
 
 training:
-  learning_rate: 0.001
-  adam_epochs: 10000
-  lbfgs_epochs: 5000
+  learning_rate: 0.0005        # halve from 0.001 — physics gradient now large
+  adam_epochs:   10000
+  lbfgs_epochs:  5000
   device: cpu
