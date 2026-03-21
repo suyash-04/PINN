@@ -155,10 +155,10 @@ class PINNTrainer:
             self.lbfgs_optimizer.step(closure)
 
             # Evaluate once after the step for clean logging
-            with torch.no_grad():
-                _, components = self.criterion(batch)
+            _, components = self.criterion(batch)
 
             self._log_components("LBFGS", outer, components)
+
 
             # Early stopping check
             current_total = components['total']
@@ -194,11 +194,16 @@ class PINNTrainer:
         norm_params      = batch['norm_params']
         norm_params_path = Path(self.config.model_training.root) / "norm_params.json"
         with open(norm_params_path, 'w') as f:
-            json.dump({k: float(v) for k, v in norm_params.items()}, f, indent=2)
+            json.dump({k: float(v) if not isinstance(v, str) else v for k, v in norm_params.items()}, f, indent=2)
         logger.info(f"norm_params saved → {norm_params_path}")
 
 
 if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     trainer = PINNTrainer(device=device)
     trainer.train()

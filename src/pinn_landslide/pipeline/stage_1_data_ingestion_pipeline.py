@@ -10,7 +10,7 @@ from src.pinn_landslide.exception.exception import customexception
 class DataIngestionPipeline:
     def __init__(self):
         self.config = ConfigurationManager()
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = self.config.get_training_config().device
    
     def run(self):
         try:
