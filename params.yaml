@@ -1,35 +1,41 @@
 architecture:
-    n_hidden_layers: 7
-    neurons_per_layer: 64
-    activation: tanh
-    input_dim : 2
-    output_dim : 1
-
-
+  n_hidden_layers  : 7
+  neurons_per_layer: 64
+  activation       : tanh
+  input_dim        : 2
+  output_dim       : 1
 
 geo_params:
-  Ks: 1.5e-5          # Saturated hydraulic conductivity (m/s) — phyllite-schist
-  theta_s: 0.45       # Saturated water content
-  theta_r: 0.05       # Residual water content
-  alpha: 0.8          # van Genuchten alpha (1/m)
-  n: 1.4              # Pore-size distribution index
-  l: 0.5              # Tortuosity / connectivity
-  c_prime: 5.0        # Effective cohesion (kPa)
-  phi_prime: 28.0     # Effective friction angle (degrees)
-  gamma: 20.0         # Bulk unit weight (kN/m3)
-  beta: 42.0          # Slope angle (degrees)       # Failure plane depth (m)
-  gamma_w: 9.81       # Unit weight of water (kN/m3)
-
+  Ks       : 5.56e-6
+  theta_s  : 0.45
+  theta_r  : 0.06
+  alpha    : 1.8
+  n        : 1.4
+  l        : 0.5
+  c_prime  : 115.0
+  phi_prime: 34.5
+  gamma    : 18.5
+  beta     : 43.0
+  gamma_w  : 9.81
 
 loss_weights:
-  lambda_physics:  1000000.0   # 1e6 — brings physics to same scale as anchor
-  lambda_anchor:   10.0        # keep — your ground truth, do not reduce
-  lambda_initial:  10.0        # raise from 5 to 10 — IC as important as anchor
-  lambda_boundary: 1.0         # lower from 5 to 1 — placeholder flux not reliable
-  lambda_failure:  20.0        # keep — your primary validation target
+  lambda_physics : 1000000.0
+  lambda_anchor  : 10.0
+  lambda_initial : 10.0
+  lambda_boundary: 1.0
+  lambda_failure : 20.0
 
 training:
-  learning_rate: 0.0005        # halve from 0.001 — physics gradient now large
-  adam_epochs:   10000
-  lbfgs_epochs:  5000
-  device: cpu
+  learning_rate: 0.0005
+  adam_epochs  : 5000
+  lbfgs_epochs : 5000
+  device       : cpu
+
+window:
+  t_start_hr: 1155.0
+  t_end_hr  : 1489.0
+  t_dur_hr  : 334.0
+  z_max_m   : 55.0
+  psi_min_m : -2.540
+  psi_max_m :  1.737
+  phys_scale:  9.818e-10

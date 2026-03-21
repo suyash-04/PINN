@@ -8,15 +8,22 @@ from src.pinn_landslide.entity.config_entity import GeoParamsConfig
 from src.pinn_landslide.utils.utils import create_directories, read_yaml
 import math
 
+
 class DataIngestion():
-    def __init__(self, device: torch.device, geo_config: GeoParamsConfig, config: Path = CONFIG_FILE_PATH):
-        self.config = read_yaml(config)
-        self.device = device
+    def __init__(self, device: torch.device, geo_config: GeoParamsConfig,
+                 config: Path = CONFIG_FILE_PATH):
+        self.config     = read_yaml(config)
+        self.device     = device
         self.geo_config = geo_config
         create_directories([f"{self.config.data_ingestion.root}"])
 
     def load_hydrus_data(self) -> pd.DataFrame:
-        parsed_data = []
+        """
+        Parse HYDRUS-1D Nod_Inf output file.
+        Time units in data.out are HOURS (T = hours in file header).
+        Column written: Time_hours  (not Time_days).
+        """
+        parsed_data  = []
         current_time = None
         self.file_path = self.config.data_ingestion.raw_data_file
 
@@ -29,30 +36,41 @@ class DataIngestion():
                 if line and line[0].isdigit():
                     parts = line.split()
                     if len(parts) >= 4 and current_time is not None:
-                        depth, head = float(parts[1]), float(parts[2])
+                        depth = float(parts[1])
+                        head  = float(parts[2])
                         parsed_data.append([current_time, depth, head])
-                        
-        df = pd.DataFrame(parsed_data, columns=['Time_days', 'Depth_m', 'Pressure_Head'])
-        df['Depth_m'] = np.abs(df['Depth_m']) # PINN domain assumes positive thickness
+
+        df = pd.DataFrame(
+            parsed_data,
+            columns=['Time_hours', 'Depth_m', 'Pressure_Head']
+        )
+        df['Depth_m'] = np.abs(df['Depth_m'])
         return df
-    
-    def add_FS_feature(self, df: pd.DataFrame):
-        gamma_w = self.geo_config.gamma_w
-        gamma_dry = self.geo_config.gamma - (self.geo_config.theta_s * gamma_w) 
-        c_prime = self.geo_config.c_prime
-        phi_rad = math.radians(self.geo_config.phi_prime)
+
+    def add_FS_feature(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Compute Factor of Safety using the infinite-slope model and
+        save the processed CSV.  Column Time_hours is preserved.
+        """
+        gamma_w  = self.geo_config.gamma_w
+        c_prime  = self.geo_config.c_prime
+        phi_rad  = math.radians(self.geo_config.phi_prime)
         beta_rad = math.radians(self.geo_config.beta)
-        
-        positive_head = np.maximum(df["Pressure_Head"], 0)
-        u = positive_head * gamma_w
-        
-        dynamic_weight = gamma_dry + (df["Moisture"] * gamma_w) if "Moisture" in df else self.geo_config.gamma
-        abs_depth = df['Depth_m']
-        
-        sigma = dynamic_weight * abs_depth * (np.cos(beta_rad) ** 2)
-        tau = dynamic_weight * abs_depth * np.sin(beta_rad) * np.cos(beta_rad)
+
+        positive_head  = np.maximum(df['Pressure_Head'], 0)
+        u              = positive_head * gamma_w
+
+        if 'Moisture' in df.columns:
+            dynamic_weight = self.geo_config.gamma + (df['Moisture'] * gamma_w)
+        else:
+            dynamic_weight = self.geo_config.gamma
+
+        abs_depth        = df['Depth_m']
+        sigma            = dynamic_weight * abs_depth * (np.cos(beta_rad) ** 2)
+        tau              = dynamic_weight * abs_depth * np.sin(beta_rad) * np.cos(beta_rad)
         effective_stress = np.maximum(sigma - u, 0)
-        
+
         df['FS'] = (c_prime + effective_stress * np.tan(phi_rad)) / np.maximum(tau, 1e-9)
+
         df.to_csv(self.config.data_ingestion.ingested_data, index=False)
         return df

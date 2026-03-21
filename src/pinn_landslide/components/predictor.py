@@ -1,297 +1,441 @@
 """
 PINN Landslide Predictor
 ========================
-Loads a trained PINN model and, given:
-  - a soil column depth profile (z values in metres)
-  - hourly time steps
-  - hourly rainfall data (mm/hr)
+Loads a trained PINN model and, given a CSV file containing hourly
+forecasted rainfall, predicts when and where the Factor of Safety
+first drops below 1.0 — providing an early warning lead time.
 
-predicts pressure head ψ(z, t), computes the Factor of Safety (FS)
-at every (z, t) point, and reports when / where the slope first fails.
+Expected rainfall CSV format
+-----------------------------
+    t,rainfall
+    1155,0.0
+    1156,2.3
+    1157,5.1
+    ...
+
+  - Column `t`        : simulation hour (absolute, same units as training)
+  - Column `rainfall` : hourly rainfall intensity in mm/hr
 
 Usage
 -----
-    predictor = SlopeFailurePredictor(model_path="artifacts/model.pth")
-    results   = predictor.predict(
-                    z_values      = np.linspace(0.1, 3.0, 30),   # metres
-                    rainfall_mm_hr= np.array([...]),              # length = n_hours
+    predictor = SlopeFailurePredictor()
+    results   = predictor.predict_from_csv(
+                    rainfall_csv  = "data/forecast_rainfall.csv",
+                    z_values      = np.linspace(0.1, 55.0, 100),
                 )
     predictor.print_report(results)
     predictor.plot_results(results)
+    predictor.to_dataframe(results).to_csv("results/predictions.csv")
 """
 
+import json
 import math
 import numpy as np
 import pandas as pd
 import torch
-import torch.nn as nn
-import matplotlib
 import matplotlib.pyplot as plt
-import matplotlib.ticker as ticker
 from matplotlib.colors import TwoSlopeNorm
-from src.pinn_landslide.utils.utils import create_directories, read_yaml, _vg_Se, _vg_K
-from src.pinn_landslide.entity.config_entity import PINNArchConfig as ArchConfig, GeoParamsConfig as GeoParams, TrainingConfig as TrainConfig
+from pathlib import Path
+from typing import Optional, Dict, Any
+
+from src.pinn_landslide.utils.utils import create_directories, _vg_Se, _vg_K
 from src.pinn_landslide.components.pinn_architecture import PINN
 from src.pinn_landslide.config.configuration import ConfigurationManager
-from pathlib import Path
-from typing import Optional, Tuple, Dict, Any
-from dataclasses import dataclass
 
-# ---------------------------------------------------------------------------
-# Minimal inline definitions so this file is self-contained.
-# Replace the imports below with your real package imports if preferred.
-# ---------------------------------------------------------------------------
-
-
-
-
-# ── Minimal config dataclasses ───────────────────────────────────────────────
-
-
-
-#
 
 # ── Rainfall → boundary-flux conversion ──────────────────────────────────────
 def rainfall_to_flux(rainfall_mm_hr: np.ndarray, Ks_m_s: float) -> np.ndarray:
     """
     Convert rainfall intensity (mm/hr) to infiltration flux (m/s).
-    Infiltration is capped at Ks (excess becomes runoff — Green-Ampt style).
-    Returns negative values (downward = positive z direction in Richards eq).
+    Infiltration is capped at Ks (excess becomes runoff).
+    Returns negative values (downward infiltration).
     """
-    flux_m_s = rainfall_mm_hr / 1000.0 / 3600.0   # mm/hr → m/s
-    return -np.minimum(flux_m_s, Ks_m_s)           # negative = infiltrating
+    flux_m_s = rainfall_mm_hr / 1000.0 / 3600.0
+    return -np.minimum(flux_m_s, Ks_m_s)
 
 
-# ============================================================================
+# =============================================================================
 # Main predictor class
-# ============================================================================
+# =============================================================================
 
 class SlopeFailurePredictor:
     """
     End-to-end predictor for slope stability using a trained PINN.
 
+    Loads norm_params.json saved by the trainer automatically so that
+    normalisation exactly matches training.
+
     Parameters
     ----------
-    model_path : str | Path
-        Path to the saved ``model.state_dict()`` file.
-    arch_config : ArchConfig, optional
-        Network architecture. Defaults match the training defaults.
-    geo_params : GeoParams, optional
-        Geotechnical parameters. Defaults match the training defaults.
+    model_path : str | Path, optional
+        Path to pinn_model.pt.  Defaults to artifacts/model/pinn_model.pt.
+    norm_params_path : str | Path, optional
+        Path to norm_params.json.  Defaults to artifacts/model/norm_params.json.
     device : torch.device, optional
-        CPU or CUDA device.
+        CPU or CUDA.  Auto-detected if not specified.
     """
+
+    DEFAULT_MODEL_PATH       = Path("artifacts/model/pinn_model.pt")
+    DEFAULT_NORM_PARAMS_PATH = Path("artifacts/model/norm_params.json")
 
     def __init__(
         self,
-        model_path:  str | Path,
-        arch_config: ArchConfig  = None,
-        geo_params:  GeoParams   = None,
-        device:      torch.device = None,
+        model_path:       str | Path = None,
+        norm_params_path: str | Path = None,
+        device:           torch.device = None,
     ):
-        self.device    = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.geo       =geo_params
-        self.arch      = arch_config
+        self.device = device or torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )
+
+        # ── Load configuration ────────────────────────────────────────────
+        config_manager = ConfigurationManager()
+        self.geo       = config_manager.get_geo_params_config()
+        self.arch      = config_manager.get_pinn_arch_config()
+        self.win       = config_manager.get_window_config()
         self.beta_rad  = math.radians(self.geo.beta)
         self.phi_rad   = math.radians(self.geo.phi_prime)
 
-        # Load model
+        # ── Load normalisation parameters from saved JSON ─────────────────
+        norm_path = Path(norm_params_path or self.DEFAULT_NORM_PARAMS_PATH)
+        if not norm_path.exists():
+            raise FileNotFoundError(
+                f"norm_params.json not found at {norm_path}.\n"
+                f"Run training first — trainer.py saves this file automatically."
+            )
+        with open(norm_path) as f:
+            self.norm = json.load(f)
+
+        self.T_START = float(self.norm.get('t_window_start', self.win.t_start_hr))
+        self.T_DUR   = float(self.norm['t_max'])
+        self.Z_MAX   = float(self.norm['z_max'])
+        self.PSI_MIN = float(self.norm['psi_min'])
+        self.PSI_MAX = float(self.norm['psi_max'])
+        self.T_END   = self.T_START + self.T_DUR
+
+        print(f"[Predictor] norm_params loaded  →  window {self.T_START:.0f}"
+              f"–{self.T_END:.0f} hr  |  "
+              f"psi {self.PSI_MIN:.3f} to {self.PSI_MAX:.3f} m")
+
+        # ── Load trained model ────────────────────────────────────────────
+        model_path = Path(model_path or self.DEFAULT_MODEL_PATH)
+        if not model_path.exists():
+            raise FileNotFoundError(f"Model not found at {model_path}.")
         self.model = PINN(self.arch).to(self.device)
-        state = torch.load(model_path, map_location=self.device)
-        self.model.load_state_dict(state)
+        self.model.load_state_dict(
+            torch.load(model_path, map_location=self.device, weights_only=True)
+        )
         self.model.eval()
-        print(f"[Predictor] Model loaded from {model_path}  |  device: {self.device}")
+        print(f"[Predictor] Model loaded  →  {model_path}  |  device: {self.device}")
 
-    # ------------------------------------------------------------------ #
-    #  Core prediction                                                     #
-    # ------------------------------------------------------------------ #
+    # ── normalisation helpers (must match data_loader.py) ────────────────
+    def _t_norm(self, t_hr: np.ndarray) -> np.ndarray:
+        return (t_hr - self.T_START) / self.T_DUR
 
-    def predict(
+    def _z_norm(self, z_m: np.ndarray) -> np.ndarray:
+        return z_m / self.Z_MAX
+
+    def _psi_denorm(self, psi_norm: np.ndarray) -> np.ndarray:
+        return psi_norm * (self.PSI_MAX - self.PSI_MIN) + self.PSI_MIN
+
+    # =========================================================================
+    # CSV loader
+    # =========================================================================
+
+    def load_rainfall_csv(self, csv_path: str | Path) -> pd.DataFrame:
+        """
+        Load and validate a rainfall CSV file.
+
+        Expected columns:
+            t         — simulation hour (float or int)
+            rainfall  — hourly rainfall intensity in mm/hr (float)
+
+        Returns sorted DataFrame with exactly these two columns.
+
+        Raises
+        ------
+        ValueError  if required columns are missing or values are invalid.
+        FileNotFoundError  if the file does not exist.
+        """
+        path = Path(csv_path)
+        if not path.exists():
+            raise FileNotFoundError(f"Rainfall CSV not found: {path}")
+
+        df = pd.read_csv(path)
+
+        # Accept common column name variants
+        col_map = {}
+        for col in df.columns:
+            lc = col.strip().lower()
+            if lc in ('t', 'time', 'time_hr', 'time_hours', 'hour', 'hours'):
+                col_map[col] = 't'
+            elif lc in ('rainfall', 'rain', 'rainfall_mm_hr', 'rain_mm_hr',
+                        'precip', 'precipitation', 'intensity'):
+                col_map[col] = 'rainfall'
+
+        df = df.rename(columns=col_map)
+
+        missing = [c for c in ('t', 'rainfall') if c not in df.columns]
+        if missing:
+            raise ValueError(
+                f"Rainfall CSV is missing columns: {missing}\n"
+                f"Found columns: {list(df.columns)}\n"
+                f"Required: 't' (simulation hour) and 'rainfall' (mm/hr)"
+            )
+
+        df = df[['t', 'rainfall']].copy()
+        df['t']        = pd.to_numeric(df['t'],        errors='coerce')
+        df['rainfall'] = pd.to_numeric(df['rainfall'], errors='coerce')
+
+        if df.isnull().any().any():
+            raise ValueError("Rainfall CSV contains non-numeric values.")
+        if (df['rainfall'] < 0).any():
+            raise ValueError("Rainfall values must be >= 0 mm/hr.")
+
+        df = df.sort_values('t').reset_index(drop=True)
+
+        print(f"[Predictor] Rainfall CSV loaded  →  {path.name}")
+        print(f"            rows     : {len(df)}")
+        print(f"            t range  : {df['t'].min():.1f} to {df['t'].max():.1f} hr")
+        print(f"            rainfall : {df['rainfall'].min():.2f} to "
+              f"{df['rainfall'].max():.2f} mm/hr  "
+              f"(total {df['rainfall'].sum():.1f} mm)")
+
+        return df
+
+    # =========================================================================
+    # Core prediction from CSV
+    # =========================================================================
+
+    def predict_from_csv(
         self,
-        z_values:       np.ndarray,
-        rainfall_mm_hr: np.ndarray,
-        t_start_hr:     float = 0.0,
-        norm_params:    Optional[Dict[str, float]] = None,
+        rainfall_csv: str | Path,
+        z_values:     np.ndarray,
     ) -> Dict[str, Any]:
         """
-        Predict ψ, θ, K, FS for every (z, t) combination.
+        Predict slope stability from a rainfall CSV file.
 
         Parameters
         ----------
-        z_values : 1-D array of depths in metres (e.g. np.linspace(0.1, 3.0, 30))
-        rainfall_mm_hr : 1-D array of hourly rainfall intensities (mm/hr)
-        t_start_hr : starting hour offset (default 0)
-        norm_params : dict with keys psi_min, psi_max, z_max, t_max.
-                      If None, sensible defaults are inferred automatically.
+        rainfall_csv : str | Path
+            Path to CSV file with columns `t` (simulation hour) and
+            `rainfall` (mm/hr).
+        z_values : 1-D np.ndarray
+            Depth values in metres to query (e.g. np.linspace(0.1, 55.0, 100)).
 
         Returns
         -------
-        dict with keys:
-            times_hr, z_values, psi, K, theta, FS,
-            rainfall_mm_hr, infiltration_flux,
-            failure_detected, first_failure_time_hr, first_failure_depth_m,
-            min_FS_series (minimum FS over depth at each hour)
+        dict  — full results including FS, psi, failure time, lead time.
+                Pass directly to print_report(), plot_results(), to_dataframe().
         """
-        n_hours = len(rainfall_mm_hr)
-        times_hr = t_start_hr + np.arange(n_hours, dtype=np.float64)
-
-        # ── Normalisation parameters ─────────────────────────────────────
-        z_max = float(z_values.max())
-        t_max = float(times_hr.max()) / 24.0        # keep in days internally
-
-        if norm_params is None:
-            # Heuristic defaults — ideally loaded from your saved batch dict
-            psi_min = -10.0   # metres (negative = suction)
-            psi_max =  2.0    # metres (positive = ponding)
-        else:
-            psi_min = norm_params["psi_min"]
-            psi_max = norm_params["psi_max"]
-            z_max   = norm_params.get("z_max", z_max)
-            t_max   = norm_params.get("t_max", t_max)
-
-        psi_range = psi_max - psi_min
-
-        # ── Build mesh of all (z, t) pairs ───────────────────────────────
-        ZZ, TT = np.meshgrid(z_values, times_hr / 24.0)   # TT in days
-        Z_flat = ZZ.ravel()
-        T_flat = TT.ravel()
-
-        z_norm = torch.tensor(Z_flat / z_max, dtype=torch.float32, device=self.device).view(-1, 1)
-        t_norm = torch.tensor(T_flat / t_max, dtype=torch.float32, device=self.device).view(-1, 1)
-
-        # ── Forward pass (no gradient needed for FS calculation) ─────────
-        with torch.no_grad():
-            psi_norm = self.model(z_norm, t_norm)
-
-        psi_phys = (psi_norm * psi_range + psi_min).cpu().numpy().reshape(n_hours, len(z_values))
-
-        # ── Hydraulic properties ─────────────────────────────────────────
-        psi_t = torch.tensor(psi_phys.ravel(), dtype=torch.float32, device=self.device)
-        K_t   = _vg_K(psi_t, self.geo.Ks, self.geo.alpha, self.geo.n, self.geo.l)
-        Se_t  = _vg_Se(psi_t, self.geo.alpha, self.geo.n)
-
-        K_phys  = K_t.cpu().numpy().reshape(n_hours, len(z_values))
-        Se_phys = Se_t.cpu().numpy().reshape(n_hours, len(z_values))
-        theta   = self.geo.theta_r + Se_phys * (self.geo.theta_s - self.geo.theta_r)
-
-        # ── Factor of Safety ─────────────────────────────────────────────
-        z_grid = np.broadcast_to(z_values[np.newaxis, :], (n_hours, len(z_values)))
-        u      = np.maximum(psi_phys, 0.0) * self.geo.gamma_w
-
-        dynamic_weight = self.geo.gamma + theta * self.geo.gamma_w
-        sigma          = dynamic_weight * z_grid * math.cos(self.beta_rad) ** 2
-        tau            = dynamic_weight * z_grid * math.sin(self.beta_rad) * math.cos(self.beta_rad)
-        eff_stress     = np.maximum(sigma - u, 0.0)
-
-        FS = (self.geo.c_prime + eff_stress * math.tan(self.phi_rad)) / np.maximum(tau, 1e-9)
-
-        # ── Rainfall → flux ──────────────────────────────────────────────
-        infiltration_flux = rainfall_to_flux(rainfall_mm_hr, self.geo.Ks)
-
-        # ── Failure detection ────────────────────────────────────────────
-        min_FS_series = FS.min(axis=1)          # shape (n_hours,)
-        failure_mask  = min_FS_series <= 1.0
-
-        failure_detected       = bool(failure_mask.any())
-        first_failure_time_hr  = float(times_hr[failure_mask][0])  if failure_detected else None
-        first_failure_depth_m  = float(z_values[FS[failure_mask][0].argmin()]) if failure_detected else None
-
-        return dict(
-            times_hr               = times_hr,
-            z_values               = z_values,
-            psi                    = psi_phys,
-            K                      = K_phys,
-            theta                  = theta,
-            FS                     = FS,
-            rainfall_mm_hr         = rainfall_mm_hr,
-            infiltration_flux      = infiltration_flux,
-            failure_detected       = failure_detected,
-            first_failure_time_hr  = first_failure_time_hr,
-            first_failure_depth_m  = first_failure_depth_m,
-            min_FS_series          = min_FS_series,
+        df = self.load_rainfall_csv(rainfall_csv)
+        return self._run_prediction(
+            abs_times_hr   = df['t'].values,
+            rainfall_mm_hr = df['rainfall'].values,
+            z_values       = z_values,
         )
 
-    # ------------------------------------------------------------------ #
-    #  Text report                                                         #
-    # ------------------------------------------------------------------ #
+    # =========================================================================
+    # Core prediction (internal)
+    # =========================================================================
+
+    def _run_prediction(
+        self,
+        abs_times_hr:   np.ndarray,
+        rainfall_mm_hr: np.ndarray,
+        z_values:       np.ndarray,
+    ) -> Dict[str, Any]:
+
+        forecast_start_hr = float(abs_times_hr[0])
+
+        # ── Clip to training window ───────────────────────────────────────
+        valid_mask = (abs_times_hr >= self.T_START) & (abs_times_hr <= self.T_END)
+        n_valid    = valid_mask.sum()
+
+        if n_valid == 0:
+            raise ValueError(
+                f"No forecast hours fall within the training window "
+                f"[{self.T_START:.0f}, {self.T_END:.0f}] hr.\n"
+                f"Your CSV covers {abs_times_hr[0]:.0f}–{abs_times_hr[-1]:.0f} hr."
+            )
+
+        if not valid_mask.all():
+            n_clipped = int((~valid_mask).sum())
+            print(f"[Predictor] Warning: {n_clipped} rows outside training window "
+                  f"[{self.T_START:.0f}, {self.T_END:.0f}] hr — clipped.")
+
+        valid_times_hr   = abs_times_hr[valid_mask]
+        valid_rainfall   = rainfall_mm_hr[valid_mask]
+        forecast_offsets = valid_times_hr - forecast_start_hr
+
+        # ── Build (z, t) mesh ─────────────────────────────────────────────
+        ZZ, TT = np.meshgrid(z_values, valid_times_hr)
+        z_flat = ZZ.ravel()
+        t_flat = TT.ravel()
+
+        z_tensor = torch.tensor(
+            self._z_norm(z_flat), dtype=torch.float32, device=self.device
+        ).view(-1, 1)
+        t_tensor = torch.tensor(
+            self._t_norm(t_flat), dtype=torch.float32, device=self.device
+        ).view(-1, 1)
+
+        # ── PINN forward pass ─────────────────────────────────────────────
+        with torch.no_grad():
+            psi_norm_pred = self.model(z_tensor, t_tensor).cpu().numpy()
+
+        n_z   = len(z_values)
+        psi_phys = self._psi_denorm(psi_norm_pred).reshape(n_valid, n_z)
+
+        # ── Hydraulic properties ──────────────────────────────────────────
+        psi_t = torch.tensor(
+            psi_phys.ravel(), dtype=torch.float32, device=self.device
+        )
+        K_phys  = _vg_K(psi_t, self.geo.Ks, self.geo.alpha,
+                        self.geo.n, self.geo.l).cpu().numpy().reshape(n_valid, n_z)
+        Se_phys = _vg_Se(psi_t, self.geo.alpha,
+                         self.geo.n).cpu().numpy().reshape(n_valid, n_z)
+        theta   = self.geo.theta_r + Se_phys * (self.geo.theta_s - self.geo.theta_r)
+
+        # ── Factor of Safety ──────────────────────────────────────────────
+        z_grid         = np.broadcast_to(z_values[np.newaxis, :], (n_valid, n_z))
+        u              = np.maximum(psi_phys, 0.0) * self.geo.gamma_w
+        dynamic_weight = self.geo.gamma + theta * self.geo.gamma_w
+        sigma          = dynamic_weight * z_grid * math.cos(self.beta_rad) ** 2
+        tau            = (dynamic_weight * z_grid
+                          * math.sin(self.beta_rad) * math.cos(self.beta_rad))
+        eff_stress     = np.maximum(sigma - u, 0.0)
+        FS             = ((self.geo.c_prime
+                           + eff_stress * math.tan(self.phi_rad))
+                          / np.maximum(tau, 1e-9))
+
+        # ── Failure detection ─────────────────────────────────────────────
+        min_FS_series    = FS.min(axis=1)
+        failure_mask     = min_FS_series <= 1.0
+        failure_detected = bool(failure_mask.any())
+
+        first_failure_abs_hr    = None
+        first_failure_offset_hr = None
+        first_failure_depth_m   = None
+        warning_lead_time_hr    = None
+
+        if failure_detected:
+            idx = int(np.argmax(failure_mask))
+            first_failure_abs_hr    = float(valid_times_hr[idx])
+            first_failure_offset_hr = float(forecast_offsets[idx])
+            first_failure_depth_m   = float(z_values[FS[idx].argmin()])
+            warning_lead_time_hr    = first_failure_offset_hr
+
+        return dict(
+            abs_times_hr            = valid_times_hr,
+            forecast_offsets_hr     = forecast_offsets,
+            forecast_start_hr       = forecast_start_hr,
+            t_window_start          = self.T_START,
+            t_window_end            = self.T_END,
+            z_values                = z_values,
+            psi                     = psi_phys,
+            K                       = K_phys,
+            theta                   = theta,
+            FS                      = FS,
+            min_FS_series           = min_FS_series,
+            rainfall_mm_hr          = valid_rainfall,
+            infiltration_flux       = rainfall_to_flux(valid_rainfall, self.geo.Ks),
+            failure_detected        = failure_detected,
+            first_failure_abs_hr    = first_failure_abs_hr,
+            first_failure_offset_hr = first_failure_offset_hr,
+            first_failure_depth_m   = first_failure_depth_m,
+            warning_lead_time_hr    = warning_lead_time_hr,
+            min_fs_overall          = float(min_FS_series.min()),
+        )
+
+    # =========================================================================
+    # Text report
+    # =========================================================================
 
     def print_report(self, results: Dict[str, Any]) -> None:
-        sep = "=" * 60
+        sep = "=" * 65
         print(f"\n{sep}")
-        print("  PINN SLOPE FAILURE PREDICTION — SUMMARY REPORT")
+        print("  PINN SLOPE FAILURE PREDICTION — EARLY WARNING REPORT")
         print(sep)
-        print(f"  Simulation duration : {results['times_hr'][-1]:.0f} hrs")
-        print(f"  Depth range         : {results['z_values'][0]:.2f} – {results['z_values'][-1]:.2f} m")
+        print(f"  Forecast start      : hr {results['forecast_start_hr']:.0f}  "
+              f"(day {results['forecast_start_hr']/24:.1f})")
+        print(f"  Training window     : hr {results['t_window_start']:.0f} – "
+              f"hr {results['t_window_end']:.0f}")
+        print(f"  Valid forecast hrs  : {len(results['abs_times_hr'])}")
+        print(f"  Depth range queried : {results['z_values'][0]:.2f} – "
+              f"{results['z_values'][-1]:.2f} m")
         print(f"  Total rainfall      : {results['rainfall_mm_hr'].sum():.1f} mm")
         print(f"  Peak rainfall       : {results['rainfall_mm_hr'].max():.1f} mm/hr")
         print()
 
         if results["failure_detected"]:
-            print(f"  ⚠️  FAILURE DETECTED")
-            print(f"  First failure time  : {results['first_failure_time_hr']:.1f} hrs")
+            print("  ⚠️  SLOPE FAILURE PREDICTED")
+            print(f"  Failure at sim hour : {results['first_failure_abs_hr']:.1f} hr  "
+                  f"(day {results['first_failure_abs_hr']/24:.2f})")
+            print(f"  Forecast offset     : hour {results['first_failure_offset_hr']:.0f} "
+                  f"of forecast")
             print(f"  Critical depth      : {results['first_failure_depth_m']:.2f} m")
-            print(f"  Min FS at failure   : {results['min_FS_series'].min():.4f}")
+            print(f"  Warning lead time   : {results['warning_lead_time_hr']:.1f} hr "
+                  f"from forecast start")
+            print(f"  Minimum FS          : {results['min_fs_overall']:.4f}")
         else:
-            print(f"  ✅  Slope remains STABLE throughout simulation")
-            print(f"  Minimum FS observed : {results['min_FS_series'].min():.4f}")
+            print("  ✅  SLOPE REMAINS STABLE throughout forecast window")
+            print(f"  Minimum FS observed : {results['min_fs_overall']:.4f}")
 
         print()
-        print("  Hourly FS Summary (minimum over all depths):")
-        print(f"  {'Hour':>6}  {'Rain(mm/hr)':>12}  {'Min FS':>10}  {'Status':>10}")
-        print("  " + "-" * 46)
-        for i, (hr, rain, fs) in enumerate(
-            zip(results["times_hr"], results["rainfall_mm_hr"], results["min_FS_series"])
+        print(f"  {'Sim hr':>8}  {'Offset hr':>10}  {'Rain mm/hr':>12}  "
+              f"{'Min FS':>10}  {'Status':>8}")
+        print("  " + "-" * 56)
+        for abs_t, off_t, rain, fs in zip(
+            results["abs_times_hr"],
+            results["forecast_offsets_hr"],
+            results["rainfall_mm_hr"],
+            results["min_FS_series"],
         ):
-            status = "⚠️ FAIL" if fs <= 1.0 else "OK"
-            print(f"  {hr:>6.0f}  {rain:>12.2f}  {fs:>10.4f}  {status:>10}")
+            status = "FAIL" if fs <= 1.0 else "OK"
+            print(f"  {abs_t:>8.0f}  {off_t:>10.0f}  {rain:>12.2f}  "
+                  f"{fs:>10.4f}  {status:>8}")
         print(sep + "\n")
 
-    # ------------------------------------------------------------------ #
-    #  Export to CSV                                                       #
-    # ------------------------------------------------------------------ #
+    # =========================================================================
+    # Export to CSV
+    # =========================================================================
 
     def to_dataframe(self, results: Dict[str, Any]) -> pd.DataFrame:
-        """
-        Flatten results into a tidy DataFrame with columns:
-        time_hr, z_m, psi_m, K_m_s, theta, FS, rainfall_mm_hr
-        """
         rows = []
-        times = results["times_hr"]
-        z     = results["z_values"]
-        rain  = results["rainfall_mm_hr"]
-
-        for i, t in enumerate(times):
-            for j, depth in enumerate(z):
+        for i, (abs_t, off_t, rain) in enumerate(zip(
+            results["abs_times_hr"],
+            results["forecast_offsets_hr"],
+            results["rainfall_mm_hr"],
+        )):
+            for j, depth in enumerate(results["z_values"]):
                 rows.append({
-                    "time_hr"       : t,
+                    "sim_time_hr"    : abs_t,
+                    "forecast_hr"    : off_t,
                     "z_m"           : depth,
                     "psi_m"         : results["psi"][i, j],
                     "K_m_s"         : results["K"][i, j],
                     "theta"         : results["theta"][i, j],
                     "FS"            : results["FS"][i, j],
-                    "rainfall_mm_hr": rain[i],
+                    "rainfall_mm_hr": rain,
+                    "status"        : "FAIL" if results["FS"][i, j] <= 1.0
+                                      else "STABLE",
                 })
-
         return pd.DataFrame(rows)
 
-    # ------------------------------------------------------------------ #
-    #  Plotting                                                            #
-    # ------------------------------------------------------------------ #
+    # =========================================================================
+    # Plotting
+    # =========================================================================
 
-    def plot_results(self, results: Dict[str, Any], save_path: Optional[str] = None) -> None:
-        """
-        Four-panel summary figure:
-          1. Hourly rainfall bar chart
-          2. Minimum FS over time  (with failure threshold line)
-          3. FS heat-map  (depth × time)
-          4. Pressure-head heat-map  (depth × time)
-        """
-        times   = results["times_hr"]
-        z       = results["z_values"]
-        FS      = results["FS"]
-        psi     = results["psi"]
-        rain    = results["rainfall_mm_hr"]
-        min_fs  = results["min_FS_series"]
+    def plot_results(self, results: Dict[str, Any],
+                     save_path: Optional[str] = None) -> None:
+        times  = results["forecast_offsets_hr"]
+        z      = results["z_values"]
+        FS     = results["FS"]
+        psi    = results["psi"]
+        rain   = results["rainfall_mm_hr"]
+        min_fs = results["min_FS_series"]
+        fail_hr = results.get("first_failure_offset_hr")
 
         fig, axes = plt.subplots(4, 1, figsize=(14, 18), constrained_layout=True)
         fig.patch.set_facecolor("#0d1117")
@@ -305,125 +449,133 @@ class SlopeFailurePredictor:
 
         title_kw = dict(color="#e6edf3", fontsize=11, fontweight="bold", pad=6)
 
-        # ── 1. Rainfall ───────────────────────────────────────────────
+        # ── 1. Rainfall ───────────────────────────────────────────────────
         ax = axes[0]
         ax.bar(times, rain, width=0.8, color="#388bfd", alpha=0.85)
         ax.set_ylabel("Rainfall (mm/hr)")
-        ax.set_title("Hourly Rainfall Input", **title_kw)
-        if results["failure_detected"]:
-            ax.axvline(results["first_failure_time_hr"], color="#f85149", ls="--", lw=1.4, label="Failure time")
+        ax.set_title("Forecasted Hourly Rainfall", **title_kw)
+        if fail_hr is not None:
+            ax.axvline(fail_hr, color="#f85149", ls="--", lw=1.4,
+                       label=f"Failure at forecast hr {fail_hr:.0f}")
             ax.legend(facecolor="#161b22", labelcolor="#e6edf3", fontsize=9)
 
-        # ── 2. Min FS series ──────────────────────────────────────────
+        # ── 2. Min FS series ──────────────────────────────────────────────
         ax = axes[1]
-        colors = np.where(min_fs <= 1.0, "#f85149", "#3fb950")
-        ax.bar(times, min_fs, width=0.8, color=colors, alpha=0.85)
-        ax.axhline(1.0, color="#e3b341", ls="--", lw=1.5, label="FS = 1.0 (failure)")
+        bar_colors = np.where(min_fs <= 1.0, "#f85149", "#3fb950")
+        ax.bar(times, min_fs, width=0.8, color=bar_colors, alpha=0.85)
+        ax.axhline(1.0, color="#e3b341", ls="--", lw=1.5,
+                   label="FS = 1.0 (failure threshold)")
         ax.set_ylabel("Minimum FS (all depths)")
         ax.set_title("Factor of Safety — Minimum Over Depth Profile", **title_kw)
         ax.legend(facecolor="#161b22", labelcolor="#e6edf3", fontsize=9)
-        if results["failure_detected"]:
-            ax.axvline(results["first_failure_time_hr"], color="#f85149", ls=":", lw=1.2)
+        if fail_hr is not None:
+            ax.axvline(fail_hr, color="#f85149", ls=":", lw=1.2)
 
-        # ── 3. FS heat-map ────────────────────────────────────────────
+        # ── 3. FS heatmap ─────────────────────────────────────────────────
         ax = axes[2]
-        FS_clipped = np.clip(FS, 0.0, 3.0)
         norm = TwoSlopeNorm(vmin=0.0, vcenter=1.0, vmax=3.0)
-        im = ax.pcolormesh(
-            times, z, FS_clipped.T,
-            cmap="RdYlGn", norm=norm, shading="auto"
-        )
+        im = ax.pcolormesh(times, z, np.clip(FS, 0.0, 3.0).T,
+                           cmap="RdYlGn", norm=norm, shading="auto")
         cb = fig.colorbar(im, ax=ax, pad=0.01)
         cb.ax.tick_params(colors="#8b949e")
         cb.set_label("FS", color="#c9d1d9")
         ax.set_ylabel("Depth (m)")
-        ax.set_title("Factor of Safety  (depth × time heatmap)", **title_kw)
-        if results["failure_detected"]:
-            ax.axvline(results["first_failure_time_hr"], color="#f85149", ls="--", lw=1.4, label="First failure")
+        ax.set_title("Factor of Safety  (depth × forecast hour)", **title_kw)
+        if fail_hr is not None:
+            ax.axvline(fail_hr, color="#f85149", ls="--", lw=1.4,
+                       label=f"First failure hr {fail_hr:.0f}")
             ax.legend(facecolor="#161b22", labelcolor="#e6edf3", fontsize=9)
 
-        # ── 4. Pressure-head heat-map ─────────────────────────────────
+        # ── 4. Pressure head heatmap ──────────────────────────────────────
         ax = axes[3]
         vm = max(abs(psi.min()), abs(psi.max()))
-        im2 = ax.pcolormesh(
-            times, z, psi.T,
-            cmap="coolwarm", vmin=-vm, vmax=vm, shading="auto"
-        )
+        im2 = ax.pcolormesh(times, z, psi.T,
+                            cmap="coolwarm", vmin=-vm, vmax=vm, shading="auto")
         cb2 = fig.colorbar(im2, ax=ax, pad=0.01)
         cb2.ax.tick_params(colors="#8b949e")
         cb2.set_label("ψ (m)", color="#c9d1d9")
         ax.set_ylabel("Depth (m)")
-        ax.set_xlabel("Time (hr)")
-        ax.set_title("Pressure Head  ψ(z, t)  (depth × time heatmap)", **title_kw)
+        ax.set_xlabel("Forecast hour (offset from start)")
+        ax.set_title("Pressure Head  ψ(z, t)  (depth × forecast hour)", **title_kw)
 
-        fig.suptitle(
-            "PINN Slope Stability Prediction",
-            color="#e6edf3", fontsize=14, fontweight="bold", y=1.01
-        )
+        title = "PINN Slope Stability — Early Warning Prediction"
+        if results["failure_detected"]:
+            title += f"\n⚠  Failure predicted at forecast hour {fail_hr:.0f}"
+        fig.suptitle(title, color="#e6edf3", fontsize=13,
+                     fontweight="bold", y=1.01)
 
         if save_path:
-            fig.savefig(save_path, dpi=150, bbox_inches="tight", facecolor=fig.get_facecolor())
+            fig.savefig(save_path, dpi=150, bbox_inches="tight",
+                        facecolor=fig.get_facecolor())
             print(f"[Predictor] Figure saved → {save_path}")
         else:
             plt.show()
 
 
-# ============================================================================
-# Example / quick-start usage
-# ============================================================================
+# =============================================================================
+# Entry point — pass your rainfall CSV as a command-line argument
+# =============================================================================
 
-def run_demo():
+def run(rainfall_csv: str, z_min: float = 0.1, z_max: float = 55.0,
+        n_depths: int = 100, output_dir: str = "artifacts/results"):
     """
-    Demonstrates the predictor with synthetic rainfall input.
-    Replace model_path and parameters with your actual values.
+    Run the predictor from a rainfall CSV file.
+
+    Parameters
+    ----------
+    rainfall_csv : str
+        Path to CSV with columns `t` (simulation hour) and `rainfall` (mm/hr).
+    z_min : float
+        Shallowest depth to query in metres.
+    z_max : float
+        Deepest depth to query in metres.
+    n_depths : int
+        Number of depth points.
+    output_dir : str
+        Directory where predictions.csv and prediction_plots.png are saved.
     """
-    configuration_manager = ConfigurationManager()
-    # ── Step 1: Initialise predictor ──────────────────────────────────────
-    predictor = SlopeFailurePredictor(
-        model_path  = "artifacts/model/pinn_model.pt",  # ← change this
-        arch_config = configuration_manager.get_pinn_arch_config(),  # ← change this if you used non-default architecture
-        geo_params  = configuration_manager.get_geo_params_config()
+    predictor = SlopeFailurePredictor()
+
+    z_values = np.linspace(z_min, z_max, n_depths)
+
+    results = predictor.predict_from_csv(
+        rainfall_csv = rainfall_csv,
+        z_values     = z_values,
     )
 
-    # ── Step 2: Define inputs ─────────────────────────────────────────────
-    # Randomly sampled depth points in the soil column (metres)
-    np.random.seed(42)
-    z_values = np.sort(np.random.uniform(0.1, 3.0, 40))   # 40 random depths
+    create_directories([output_dir])
 
-    # Synthetic hourly rainfall — 72-hour event with a heavy burst at hour 36-48
-    n_hours = 72
-    rainfall = np.zeros(n_hours)
-    rainfall[10:20]  = np.random.uniform(2,  8,  10)   # light rain
-    rainfall[36:48]  = np.random.uniform(20, 40, 12)   # heavy burst
-    rainfall[55:65]  = np.random.uniform(5,  15, 10)   # moderate rain
-    # Add slight noise
-    rainfall += np.random.uniform(0, 0.5, n_hours)
-
-    # Optional: if you saved norm_params with your batch, load them here
-    # norm_params = torch.load("artifacts/data_ingestion/batch.pt")["norm_params"]
-    norm_params = None  # will use heuristic defaults
-
-    # ── Step 3: Run prediction ────────────────────────────────────────────
-    results = predictor.predict(
-        z_values       = z_values,
-        rainfall_mm_hr = rainfall,
-        norm_params    = norm_params,
-    )
-    create_directories(["artifacts/results/"])
-
-    # ── Step 4: Report ────────────────────────────────────────────────────
     predictor.print_report(results)
 
-    # ── Step 5: Export tidy CSV ───────────────────────────────────────────
     df = predictor.to_dataframe(results)
-    df.to_csv("artifacts/results/predictions.csv", index=False)
-    print(f"[Predictor] Tidy results saved → artifacts/results/predictions.csv")
+    csv_out = f"{output_dir}/predictions.csv"
+    df.to_csv(csv_out, index=False)
+    print(f"[Predictor] Results saved → {csv_out}")
 
-    # ── Step 6: Plot ──────────────────────────────────────────────────────
-    predictor.plot_results(results, save_path="artifacts/results/prediction_plots.png")
+    plot_out = f"{output_dir}/prediction_plots.png"
+    predictor.plot_results(results, save_path=plot_out)
 
     return results
 
 
 if __name__ == "__main__":
-    run_demo()
+    import sys
+    if len(sys.argv) < 2:
+        print("Usage: python predictor.py <path/to/rainfall.csv> [z_min] [z_max] [n_depths]")
+        print()
+        print("Example:")
+        print("  python predictor.py data/forecast_7days.csv 0.1 55.0 100")
+        print()
+        print("CSV format:")
+        print("  t,rainfall")
+        print("  1155,0.0")
+        print("  1156,2.3")
+        print("  1157,5.1")
+        sys.exit(1)
+
+    csv_path  = sys.argv[1]
+    z_min_arg = float(sys.argv[2]) if len(sys.argv) > 2 else 0.1
+    z_max_arg = float(sys.argv[3]) if len(sys.argv) > 3 else 55.0
+    n_dep_arg = int(sys.argv[4])   if len(sys.argv) > 4 else 100
+
+    run(csv_path, z_min_arg, z_max_arg, n_dep_arg)

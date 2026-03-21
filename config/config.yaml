@@ -1,11 +1,14 @@
 artifacts_root : artifacts
 
 data_ingestion:
-  root: artifacts/dataset
-  raw_data_file: dataset/Nod_Inf.out
-  ingested_data: artifacts/dataset/final_data.csv
-  batch_path: artifacts/dataset/data_batch.pt
+  root           : artifacts/dataset
+  raw_data_file  : dataset/data.out
+  ingested_data  : artifacts/dataset/final_data.csv
+  batch_path     : artifacts/dataset/data_batch.pt
+  anchor_csv     : dataset/PINN_anchor_points_FINAL.csv
+  collocation_csv: dataset/collocation_points_10000.csv
+  ic_csv         : dataset/PINN_initial_condition_hr_1155.csv
 
 model_training:
-  root: artifacts/model
-  model_path: artifacts/model/pinn_model.pt
+  root       : artifacts/model
+  model_path : artifacts/model/pinn_model.pt

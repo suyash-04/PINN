@@ -17,20 +17,12 @@ class CustomLoss(nn.Module):
         self.phi_rad  = math.radians(self.geo_params.phi_prime)
 
         # ── Physics residual characteristic scale ─────────────────────────
-        # For highly unsaturated soil (ψ ~ −100 m), C(ψ) ~ 2.76e-4 m⁻¹ and
-        # the time span is 123 days = 1.06e7 s.  The Richards residual in
-        # physical units is therefore O(C · Δψ / Δt) ~ 1e-8 s⁻¹.
-        # Dividing by this scale before squaring brings L_physics to O(1),
-        # making λ_physics = 1e6 actually meaningful in the total loss.
-        # Formula:  char_scale = C_characteristic * psi_range / t_max_seconds
-        #   C_char   ≈ 2.76e-4  (Van Genuchten C at ψ = −100 m, Jure params)
-        #   psi_range ≈ 453 m   (from HYDRUS training data)
-        #   t_max_s  ≈ 1.06e7 s (123 days)
-        # Result    ≈ 1.18e-8   → stored as self._phys_scale
-        #
-        # If you change soil parameters significantly, recompute C_char and
-        # update _phys_scale accordingly, or set it to None to skip scaling.
-        self._phys_scale: float = 1.18e-8   # [s⁻¹] characteristic residual
+        # Formula: C_char * psi_range / t_max_seconds
+        #   C_char    = 2.76e-4  m⁻¹  (Van Genuchten C at mean psi)
+        #   psi_range = 4.277 m        (PSI_MAX - PSI_MIN from 14-day window)
+        #   t_max_s   = 334 hr * 3600  = 1,202,400 s  (window duration)
+        # Result      = 9.818e-10
+        self._phys_scale: float = 9.818e-10   # [s⁻¹] characteristic residual
 
     # ── helper ───────────────────────────────────────────────────────────
     @property
@@ -50,7 +42,7 @@ class CustomLoss(nn.Module):
         # De-normalise to physical units
         psi_phys  = (psi_norm  * psi_range) + psi_min
         dpsi_dz   = (dpsi_dz_n * psi_range) / z_max
-        dpsi_dt   = (dpsi_dt_n * psi_range) / (t_max * 24 * 3600.0)
+        dpsi_dt   = (dpsi_dt_n * psi_range) / (t_max * 3600.0)
         d2psi_dz2 = (d2psi_dz2_n * psi_range) / (z_max ** 2)
 
         C = _vg_C(psi_phys, self.geo_params.theta_r, self.geo_params.theta_s,
@@ -69,13 +61,6 @@ class CustomLoss(nn.Module):
         RHS = dK_dz * (dpsi_dz + 1.0) + K * d2psi_dz2
         residual = LHS - RHS
 
-        # ── Residual normalisation (key fix) ──────────────────────────────
-        # For dry unsaturated soil, C ~ 1e-4 and K ~ 1e-12, making the raw
-        # residual O(1e-13).  Without normalisation λ_physics = 1e6 is still
-        # far too small to influence gradients.  Dividing by _phys_scale
-        # brings the normalised residual to O(1), so λ_physics = 1e6 gives
-        # a weighted loss of O(1e6 * 1²) = O(1e6) — clearly visible to Adam.
-        # This is consistent with Depina et al. (2022) and Wang et al. (2022).
         if self._phys_scale is not None and self._phys_scale > 0:
             residual = residual / self._phys_scale
 
@@ -103,7 +88,6 @@ class CustomLoss(nn.Module):
         K_surf = _vg_K(psi_phys, self.geo_params.Ks, self.geo_params.alpha,
                        self.geo_params.n, self.geo_params.l)
 
-        # Darcy flux: q = −K·(∂ψ/∂z + 1)
         q_pred = -K_surf * (dpsi_dz + 1.0)
         return torch.mean((q_pred + target_flux.view_as(q_pred)) ** 2)
 
@@ -144,7 +128,6 @@ class CustomLoss(nn.Module):
         denominator = torch.clamp(tau, min=1e-9)
         fs_pred     = numerator / denominator
 
-        # Soft hinge: penalise if FS > 1.0 at known failure points
         penalty = torch.clamp(1.0 - fs_pred, min=0.0) ** 2
         return torch.mean(penalty)
 
