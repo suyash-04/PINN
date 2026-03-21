@@ -78,7 +78,7 @@ def health():
 
 @app.get("/api/defaults")
 def get_defaults():
-    times = sorted(DF_HYDRUS["Time_days"].unique().tolist())
+    times = sorted(DF_HYDRUS["Time_hours"].unique().tolist())
     return {
         "geo": DEFAULT_GEO,
         "norm": DEFAULT_NORM,
@@ -121,6 +121,20 @@ def model_info():
         "arch": DEFAULT_ARCH,
         "norm": DEFAULT_NORM,
     }
+
+
+@app.get("/api/loss-history")
+def get_loss_history():
+    history_path = PROJECT_ROOT / "artifacts" / "model" / "loss_history.json"
+    if not history_path.exists():
+        return {"history": []}
+    try:
+        import json
+        with open(history_path, 'r') as f:
+            data = json.load(f)
+        return {"history": data}
+    except Exception as e:
+        return {"history": [], "error": str(e)}
 
 
 # ── Prediction endpoints ────────────────────────────────────────────
@@ -203,7 +217,7 @@ def soil_properties(req: VGRequest):
 def hydrus_comparison(req: ComparisonRequest):
     results = []
     for t_val in req.times:
-        hyd = DF_HYDRUS[DF_HYDRUS["Time_days"] == t_val].sort_values("Depth_m")
+        hyd = DF_HYDRUS[DF_HYDRUS["Time_hours"] == t_val].sort_values("Depth_m")
         if len(hyd) == 0:
             continue
         z_hyd = hyd["Depth_m"].values
@@ -333,12 +347,12 @@ def sensitivity(req: SensitivityRequest):
 
 @app.get("/api/validation")
 def validation():
-    times = sorted(DF_HYDRUS["Time_days"].unique().tolist())
+    times = sorted(DF_HYDRUS["Time_hours"].unique().tolist())
     norm = dict(DEFAULT_NORM)
     per_time = []
     all_obs, all_pred = [], []
     for t_val in times:
-        hyd = DF_HYDRUS[DF_HYDRUS["Time_days"] == t_val].sort_values("Depth_m")
+        hyd = DF_HYDRUS[DF_HYDRUS["Time_hours"] == t_val].sort_values("Depth_m")
         z_hyd = hyd["Depth_m"].values
         psi_hyd = hyd["Pressure_Head"].values
         t_arr = np.full_like(z_hyd, t_val)
@@ -372,7 +386,7 @@ def export_data(req: ExportRequest):
         for j, t in enumerate(t_arr):
             rows.append({
                 "depth_m": round(float(z), 3),
-                "time_days": round(float(t), 3),
+                "time_hours": round(float(t), 3),
                 "psi_m": round(float(psi_grid[i, j]), 4),
                 "fs": round(float(fs_grid_val[i, j]), 4),
             })

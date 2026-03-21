@@ -6,7 +6,7 @@ import Chart, { COLORS } from '../components/Chart';
 
 export default function ParameterExplorer() {
   const { geo, defaults } = useApp();
-  const [time, setTime] = useState(96);
+  const [time, setTime] = useState(defaults.norm.t_max);
   const [zMax, setZMax] = useState(40);
   const [profiles, setProfiles] = useState(null);
   const [sensitivity, setSensitivity] = useState(null);
@@ -39,7 +39,7 @@ export default function ParameterExplorer() {
 
       <Card className="grid grid-cols-2 gap-4">
         <div className="space-y-1">
-          <label className="text-xs font-medium text-slate-500">Time: <strong>Day {time}</strong></label>
+          <label className="text-xs font-medium text-slate-500">Time: <strong>Hour {time}</strong></label>
           <input type="range" min={0} max={defaults.norm.t_max} step={1} value={time}
             onChange={e => setTime(+e.target.value)} className="w-full accent-blue-600" />
         </div>
@@ -107,8 +107,8 @@ export default function ParameterExplorer() {
               className="block w-24 border rounded-lg px-2 py-1.5 text-sm" />
           </div>
           <div>
-            <label className="text-xs text-slate-500">Time (days)</label>
-            <input type="number" defaultValue={96} min={0} max={123} step={1} id="qt"
+            <label className="text-xs text-slate-500">Time (hours)</label>
+            <input type="number" defaultValue={defaults.norm.t_max} min={0} max={defaults.norm.t_max} step={1} id="qt"
               className="block w-24 border rounded-lg px-2 py-1.5 text-sm" />
           </div>
           <button onClick={() => query(+document.getElementById('qz').value, +document.getElementById('qt').value)}

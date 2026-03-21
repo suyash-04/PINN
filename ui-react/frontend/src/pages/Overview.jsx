@@ -40,10 +40,10 @@ export default function Overview() {
       {/* Metrics */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <MetricCard label="Data Points" value={defaults.n_data_points?.toLocaleString()} color="blue" />
-        <MetricCard label="Time Span" value={`0 – ${defaults.norm.t_max} d`} color="purple" />
+        <MetricCard label="Time Span" value={`0 – ${defaults.norm.t_max} hr`} color="purple" />
         <MetricCard label="Depth Range" value={`${defaults.depth_range[0]} – ${defaults.depth_range[1]} m`} color="blue" />
-        <MetricCard label="ψ at 5m, Day 96" value={`${psiVal} m`} color="amber" />
-        <MetricCard label="FS at 5m, Day 96" value={fsVal.toFixed(2)} sub={fsLabel} color={fsVal >= 1.5 ? 'green' : fsVal >= 1 ? 'amber' : 'red'} />
+        <MetricCard label={`ψ at 5m, Hour ${defaults.norm.t_max}`} value={`${psiVal} m`} color="amber" />
+        <MetricCard label={`FS at 5m, Hour ${defaults.norm.t_max}`} value={fsVal.toFixed(2)} sub={fsLabel} color={fsVal >= 1.5 ? 'green' : fsVal >= 1 ? 'amber' : 'red'} />
       </div>
 
       {/* Charts */}
@@ -53,7 +53,7 @@ export default function Overview() {
           <Chart
             data={profiles.psiProfiles.map((p, i) => ({
               x: p.psi, y: depths, type: 'scatter', mode: 'lines',
-              name: `Day ${profiles.times[i]}`, line: { color: COLORS[i], width: 2 },
+              name: `Hour ${profiles.times[i]}`, line: { color: COLORS[i], width: 2 },
             }))}
             layout={{
               xaxis: { title: 'ψ (m)' }, yaxis: { title: 'Depth (m)', autorange: 'reversed' },
@@ -67,7 +67,7 @@ export default function Overview() {
             data={[
               ...profiles.fsProfiles.map((p, i) => ({
                 x: p.fs, y: depths, type: 'scatter', mode: 'lines',
-                name: `Day ${profiles.times[i]}`, line: { color: COLORS[i], width: 2 },
+                name: `Hour ${profiles.times[i]}`, line: { color: COLORS[i], width: 2 },
               })),
               { x: [1, 1], y: [0, 50], type: 'scatter', mode: 'lines', name: 'FS=1',
                 line: { color: '#dc2626', dash: 'dash', width: 2 }, showlegend: true },

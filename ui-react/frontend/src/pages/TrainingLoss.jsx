@@ -5,31 +5,73 @@ import { PageHeader, Spinner, Card, MetricCard, Tabs } from '../components/ui';
 import Chart, { COLORS } from '../components/Chart';
 
 export default function TrainingLoss() {
-  const { defaults } = useApp();
-  // We'll simulate typical PINN training loss curves since we don't have a live training log endpoint.
-  // In production, this would read from a training log file or endpoint.
+  const [history, setHistory] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState('curve');
 
-  // Generate representative training data
-  const epochs = Array.from({ length: 200 }, (_, i) => i + 1);
-  const totalLoss = epochs.map(e => 10 * Math.exp(-0.02 * e) + 2.87 + 0.3 * Math.random() * Math.exp(-0.01 * e));
-  const dataLoss = epochs.map(e => 5 * Math.exp(-0.025 * e) + 1.5 + 0.15 * Math.random() * Math.exp(-0.01 * e));
-  const pdeLoss = epochs.map(e => 3 * Math.exp(-0.015 * e) + 0.8 + 0.1 * Math.random() * Math.exp(-0.01 * e));
-  const bcLoss = epochs.map(e => 2 * Math.exp(-0.03 * e) + 0.5 + 0.05 * Math.random() * Math.exp(-0.01 * e));
+  useEffect(() => {
+    api.getLossHistory()
+      .then(res => {
+        setHistory(res.history || []);
+        setLoading(false);
+      })
+      .catch(err => {
+        console.error("Failed to load loss history:", err);
+        setLoading(false);
+      });
+  }, []);
+
+  if (loading) return <Spinner />;
+  if (history.length === 0) {
+    return (
+      <Card>
+        <div className="p-8 text-center text-slate-500 italic">
+          No training history found. Please run model training first.
+        </div>
+      </Card>
+    );
+  }
+
+  // Pre-process history data for plotting
+  // We'll use the 'step' as the x-axis. Since steps repeat for Adam/L-BFGS,
+  // we'll create a continuous 'globalStep'.
+  let globalStep = 0;
+  const processed = history.map((h, i) => {
+    const prev = history[i-1];
+    if (prev && h.phase !== prev.phase) {
+        // Phase transition
+    }
+    return {
+      ...h,
+      dataLoss: (h.anchor || 0) + (h.failure || 0),
+      bcLoss: (h.boundary || 0) + (h.initial || 0),
+      label: `${h.phase} ${h.step}`
+    };
+  });
+
+  const steps = processed.map((_, i) => i + 1);
+  const totalLoss = processed.map(h => h.total);
+  const dataLoss = processed.map(h => h.dataLoss);
+  const pdeLoss = processed.map(h => h.physics);
+  const bcLoss = processed.map(h => h.bcLoss);
 
   const finalTotal = totalLoss[totalLoss.length - 1];
   const finalData = dataLoss[dataLoss.length - 1];
   const finalPDE = pdeLoss[pdeLoss.length - 1];
+  const totalEpochs = processed.length;
+
+  // Find the split point between Adam and L-BFGS
+  const lbfgsIndex = history.findIndex(h => h.phase === 'LBFGS');
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       <PageHeader title="Training Loss Analysis" subtitle="Loss evolution during PINN training (Adam + L-BFGS phases)" icon="📉" />
 
       <div className="grid grid-cols-4 gap-3">
-        <MetricCard label="Final Total Loss" value={finalTotal.toFixed(3)} color="blue" />
-        <MetricCard label="Data Loss" value={finalData.toFixed(3)} color="green" />
-        <MetricCard label="PDE Loss" value={finalPDE.toFixed(3)} color="amber" />
-        <MetricCard label="Epochs" value="200 + L-BFGS" color="purple" />
+        <MetricCard label="Final Total Loss" value={finalTotal.toExponential(3)} color="blue" />
+        <MetricCard label="Final Data Loss" value={finalData.toExponential(3)} color="green" />
+        <MetricCard label="Final PDE Loss" value={finalPDE.toExponential(3)} color="amber" />
+        <MetricCard label="Logged steps" value={totalEpochs} color="purple" />
       </div>
 
       <Card>
@@ -42,21 +84,25 @@ export default function TrainingLoss() {
         {tab === 'curve' && (
           <Chart
             data={[
-              { x: epochs, y: totalLoss, type: 'scatter', mode: 'lines', name: 'Total',
+              { x: steps, y: totalLoss, type: 'scatter', mode: 'lines', name: 'Total',
                 line: { color: '#2563eb', width: 2.5 } },
-              { x: epochs, y: dataLoss, type: 'scatter', mode: 'lines', name: 'Data',
+              { x: steps, y: dataLoss, type: 'scatter', mode: 'lines', name: 'Data',
                 line: { color: '#059669', width: 2 } },
-              { x: epochs, y: pdeLoss, type: 'scatter', mode: 'lines', name: 'PDE',
+              { x: steps, y: pdeLoss, type: 'scatter', mode: 'lines', name: 'PDE',
                 line: { color: '#d97706', width: 2 } },
-              { x: epochs, y: bcLoss, type: 'scatter', mode: 'lines', name: 'BC/IC',
+              { x: steps, y: bcLoss, type: 'scatter', mode: 'lines', name: 'BC/IC',
                 line: { color: '#7c3aed', width: 2 } },
             ]}
             layout={{
-              xaxis: { title: 'Epoch' }, yaxis: { title: 'Loss' }, height: 480,
-              shapes: [{ type: 'line', x0: 200, x1: 200, y0: 0, y1: 15,
-                line: { color: '#dc2626', dash: 'dot', width: 1.5 } }],
-              annotations: [{ x: 200, y: 14, text: 'L-BFGS →', showarrow: false,
-                font: { color: '#dc2626', size: 10 } }],
+              xaxis: { title: 'Logging Step' }, yaxis: { title: 'Loss' }, height: 480,
+              shapes: lbfgsIndex !== -1 ? [{
+                type: 'line', x0: lbfgsIndex + 1, x1: lbfgsIndex + 1, y0: 0, y1: 1, yref: 'paper',
+                line: { color: '#dc2626', dash: 'dot', width: 1.5 }
+              }] : [],
+              annotations: lbfgsIndex !== -1 ? [{
+                x: lbfgsIndex + 1, y: 0.95, yref: 'paper', text: 'L-BFGS →', showarrow: false,
+                font: { color: '#dc2626', size: 10 }, xanchor: 'left'
+              }] : [],
             }}
           />
         )}
@@ -64,15 +110,15 @@ export default function TrainingLoss() {
         {tab === 'components' && (
           <Chart
             data={[
-              { x: epochs, y: dataLoss.map((d, i) => d / totalLoss[i] * 100), type: 'scatter', mode: 'lines',
+              { x: steps, y: dataLoss.map((d, i) => d / totalLoss[i] * 100), type: 'scatter', mode: 'lines',
                 name: 'Data %', line: { color: '#059669' }, stackgroup: 'one', fillcolor: 'rgba(5,150,105,0.3)' },
-              { x: epochs, y: pdeLoss.map((d, i) => d / totalLoss[i] * 100), type: 'scatter', mode: 'lines',
+              { x: steps, y: pdeLoss.map((d, i) => d / totalLoss[i] * 100), type: 'scatter', mode: 'lines',
                 name: 'PDE %', line: { color: '#d97706' }, stackgroup: 'one', fillcolor: 'rgba(217,119,6,0.3)' },
-              { x: epochs, y: bcLoss.map((d, i) => d / totalLoss[i] * 100), type: 'scatter', mode: 'lines',
+              { x: steps, y: bcLoss.map((d, i) => d / totalLoss[i] * 100), type: 'scatter', mode: 'lines',
                 name: 'BC/IC %', line: { color: '#7c3aed' }, stackgroup: 'one', fillcolor: 'rgba(124,58,237,0.3)' },
             ]}
             layout={{
-              xaxis: { title: 'Epoch' }, yaxis: { title: 'Loss Component (%)' }, height: 450,
+              xaxis: { title: 'Logging Step' }, yaxis: { title: 'Loss Component (%)' }, height: 450,
             }}
           />
         )}
@@ -80,15 +126,15 @@ export default function TrainingLoss() {
         {tab === 'log' && (
           <Chart
             data={[
-              { x: epochs, y: totalLoss, type: 'scatter', mode: 'lines', name: 'Total',
+              { x: steps, y: totalLoss, type: 'scatter', mode: 'lines', name: 'Total',
                 line: { color: '#2563eb', width: 2.5 } },
-              { x: epochs, y: dataLoss, type: 'scatter', mode: 'lines', name: 'Data',
+              { x: steps, y: dataLoss, type: 'scatter', mode: 'lines', name: 'Data',
                 line: { color: '#059669', width: 2 } },
-              { x: epochs, y: pdeLoss, type: 'scatter', mode: 'lines', name: 'PDE',
+              { x: steps, y: pdeLoss, type: 'scatter', mode: 'lines', name: 'PDE',
                 line: { color: '#d97706', width: 2 } },
             ]}
             layout={{
-              xaxis: { title: 'Epoch' }, yaxis: { title: 'Loss (log)', type: 'log' }, height: 480,
+              xaxis: { title: 'Logging Step' }, yaxis: { title: 'Loss (log)', type: 'log' }, height: 480,
             }}
           />
         )}
@@ -107,7 +153,7 @@ export default function TrainingLoss() {
               <p>Quasi-Newton method for fine-tuning. Uses full-batch gradients with curvature information for faster local convergence. Typically runs for fewer iterations but each is more expensive.</p>
             </div>
           </div>
-          <p className="text-slate-500 italic">Note: Loss plateaued at ~2.87. All training data is in the unsaturated regime (ψ &lt; 0), leading to u = 0 everywhere. FS is governed primarily by depth rather than pore-water pressure variation.</p>
+          <p className="text-slate-500 italic">Note: The physics loss (PDE residual) is weighted heavily (λ_physics = 1e6) to enforce Richards' Equation. All training data is currently in the unsaturated regime (ψ &lt; 0).</p>
         </div>
       </Card>
     </div>

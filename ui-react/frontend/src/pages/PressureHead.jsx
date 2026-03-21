@@ -6,7 +6,7 @@ import Chart, { COLORS } from '../components/Chart';
 
 export default function PressureHead() {
   const { defaults } = useApp();
-  const [selectedTimes, setSelectedTimes] = useState([0, 30, 60, 90, 96, 123]);
+  const [selectedTimes, setSelectedTimes] = useState([0, Math.floor(defaults.norm.t_max * 0.5), Math.floor(defaults.norm.t_max * 0.75), defaults.norm.t_max]);
   const [depth, setDepth] = useState(5);
   const [data, setData] = useState(null);
   const [timeData, setTimeData] = useState(null);
@@ -42,7 +42,7 @@ export default function PressureHead() {
             <button key={t} onClick={() => toggle(t)}
               className={`px-3 py-1 text-xs rounded-full font-medium transition
                 ${selectedTimes.includes(t) ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
-              Day {t}
+              Hour {t}
             </button>
           ))}
         </div>
@@ -54,7 +54,7 @@ export default function PressureHead() {
           <Chart
             data={data.profiles.map((p, i) => ({
               x: p.psi, y: data.depths, type: 'scatter', mode: 'lines',
-              name: `Day ${selectedTimes[i]}`, line: { color: COLORS[i % COLORS.length], width: 2.5 },
+              name: `Hour ${selectedTimes[i]}`, line: { color: COLORS[i % COLORS.length], width: 2.5 },
             }))}
             layout={{
               xaxis: { title: 'Pressure Head ψ (m)' },

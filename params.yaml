@@ -29,7 +29,7 @@ training:
   learning_rate: 0.0005
   adam_epochs  : 5000
   lbfgs_epochs : 5000
-  device       : cpu
+  device       : mps
 
 window:
   t_start_hr: 1155.0

@@ -109,7 +109,7 @@ export default function ErrorAnalysis() {
           data={[{
             z: data.comparisons.map(c => c.abs_error.map((e, i) => Math.abs(c.psi_hydrus[i]) > 1 ? (e / Math.abs(c.psi_hydrus[i])) * 100 : 0)),
             x: data.comparisons[0]?.z || [],
-            y: data.comparisons.map(c => `Day ${c.time}`),
+            y: data.comparisons.map(c => `Hour ${c.time}`),
             type: 'heatmap', colorscale: 'YlOrRd',
             colorbar: { title: { text: '%', side: 'right' }, thickness: 15 },
           }]}
@@ -136,7 +136,7 @@ export default function ErrorAnalysis() {
                 const q = c.r2 > 0.99 ? '🟢 Excellent' : c.r2 > 0.95 ? '🟡 Good' : '🔴 Needs Work';
                 return (
                   <tr key={c.time} className="border-b border-slate-50">
-                    <td className="p-2 font-medium">Day {c.time}</td>
+                    <td className="p-2 font-medium">Hour {c.time}</td>
                     <td className="p-2">{c.r2.toFixed(4)}</td>
                     <td className="p-2">{c.rmse.toFixed(3)}</td>
                     <td className="p-2">{c.mae.toFixed(3)}</td>

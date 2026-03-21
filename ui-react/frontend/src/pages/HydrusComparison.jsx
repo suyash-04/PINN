@@ -6,7 +6,7 @@ import Chart, { COLORS } from '../components/Chart';
 
 export default function HydrusComparison() {
   const { defaults } = useApp();
-  const [times, setTimes] = useState([0, 60, 90, 96, 123]);
+  const [times, setTimes] = useState([0, 100, 200, 300, 334]);
   const [data, setData] = useState(null);
   const [tab, setTab] = useState('overlay');
 
@@ -44,7 +44,7 @@ export default function HydrusComparison() {
             <button key={t} onClick={() => toggle(t)}
               className={`px-3 py-1 text-xs rounded-full font-medium transition
                 ${times.includes(t) ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
-              Day {t}
+              Hour {t}
             </button>
           ))}
         </div>
@@ -70,10 +70,10 @@ export default function HydrusComparison() {
               <Chart
                 data={data.comparisons.flatMap((c, i) => [
                   { x: c.psi_hydrus, y: c.z, type: 'scatter', mode: 'markers',
-                    name: `HYDRUS t=${c.time}d`, marker: { color: COLORS[i], size: 5, symbol: 'circle-open' },
+                    name: `HYDRUS t=${c.time}hr`, marker: { color: COLORS[i], size: 5, symbol: 'circle-open' },
                     legendgroup: `t${c.time}` },
                   { x: c.psi_pinn, y: c.z, type: 'scatter', mode: 'lines',
-                    name: `PINN t=${c.time}d`, line: { color: COLORS[i], width: 2.5 },
+                    name: `PINN t=${c.time}hr`, line: { color: COLORS[i], width: 2.5 },
                     legendgroup: `t${c.time}` },
                 ])}
                 layout={{
@@ -87,7 +87,7 @@ export default function HydrusComparison() {
               <Chart
                 data={data.comparisons.map((c, i) => ({
                   x: c.abs_error, y: c.z, type: 'scatter', mode: 'lines+markers',
-                  name: `t=${c.time}d`, line: { color: COLORS[i] }, marker: { size: 3 },
+                  name: `t=${c.time}hr`, line: { color: COLORS[i] }, marker: { size: 3 },
                 }))}
                 layout={{
                   xaxis: { title: '|ψ_PINN − ψ_HYDRUS| (m)' },
@@ -122,7 +122,7 @@ export default function HydrusComparison() {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="border-b text-left text-slate-500">
-                    <th className="p-2">Time (d)</th><th className="p-2">R²</th><th className="p-2">RMSE</th><th className="p-2">MAE</th>
+                    <th className="p-2">Time (hr)</th><th className="p-2">R²</th><th className="p-2">RMSE</th><th className="p-2">MAE</th>
                   </tr>
                 </thead>
                 <tbody>

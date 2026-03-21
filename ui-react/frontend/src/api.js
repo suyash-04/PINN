@@ -23,6 +23,7 @@ export const api = {
   getModelInfo:   () => request('/model-info'),
   getValidation:  (body) => body ? post('/validation', body) : request('/validation'),
   hydrusData:     () => request('/hydrus-data'),
+  getLossHistory: () => request('/loss-history'),
 
   /* ── POST endpoints ─── */
   predict:        (body) => post('/predict', body),

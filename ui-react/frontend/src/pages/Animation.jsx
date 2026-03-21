@@ -92,7 +92,7 @@ export default function Animation() {
                 className="w-full accent-blue-600" />
               <div className="flex justify-between text-[10px] text-slate-400 mt-1 px-1">
                 {times.filter((_, i) => i % Math.ceil(times.length / 10) === 0 || i === times.length - 1).map(t => (
-                  <span key={t}>{t}d</span>
+                  <span key={t}>{t}hr</span>
                 ))}
               </div>
             </div>
@@ -100,7 +100,7 @@ export default function Animation() {
 
           {/* Current frame info */}
           <div className="flex items-center gap-3">
-            <div className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold">Day {t}</div>
+            <div className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold">Hour {t}</div>
             <div className="text-xs text-slate-500">Frame {frame + 1} / {times.length}</div>
             {d && (
               <>
@@ -118,19 +118,19 @@ export default function Animation() {
                   data={[{
                     x: d.psi, y: d.depths, type: 'scatter', mode: 'lines',
                     line: { color: '#2563eb', width: 3 }, fill: 'tozerox', fillcolor: 'rgba(37,99,235,0.08)',
-                    name: `ψ at t=${t}d`,
+                    name: `ψ at t=${t}hr`,
                   }]}
                   layout={{
                     xaxis: { title: 'ψ (m)', range: [norm.psi_min * 1.05, norm.psi_max * 0.5] },
                     yaxis: { title: 'Depth (m)', autorange: 'reversed' },
-                    height: 500, title: { text: `Pressure Head Profile — Day ${t}`, font: { size: 14 } },
+                    height: 500, title: { text: `Pressure Head Profile — Hour ${t}`, font: { size: 14 } },
                   }}
                 />
               ) : (
                 <Chart
                   data={[{
                     x: d.fs, y: d.depths, type: 'scatter', mode: 'lines',
-                    line: { color: '#059669', width: 3 }, name: `FS at t=${t}d`,
+                    line: { color: '#059669', width: 3 }, name: `FS at t=${t}hr`,
                   }, {
                     x: [1, 1], y: [0, zMax], type: 'scatter', mode: 'lines',
                     line: { color: '#dc2626', width: 2, dash: 'dash' }, name: 'FS = 1',
@@ -138,7 +138,7 @@ export default function Animation() {
                   layout={{
                     xaxis: { title: 'Factor of Safety', range: [0, Math.max(5, Math.max(...d.fs) * 1.1)] },
                     yaxis: { title: 'Depth (m)', autorange: 'reversed' },
-                    height: 500, title: { text: `Factor of Safety — Day ${t}`, font: { size: 14 } },
+                    height: 500, title: { text: `Factor of Safety — Hour ${t}`, font: { size: 14 } },
                   }}
                 />
               )}

@@ -18,7 +18,7 @@ export default function ScenarioComparator() {
   ]);
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [time, setTime] = useState(96);
+  const [time, setTime] = useState(defaults.norm.t_max);
 
   const addPreset = (name) => {
     const preset = PRESETS[name];
@@ -86,7 +86,7 @@ export default function ScenarioComparator() {
       <Card>
         <div className="flex items-center gap-4">
           <div className="flex-1">
-            <SliderField label={`Analysis Time: Day ${time}`} value={time} min={0} max={123} step={1} onChange={setTime} />
+            <SliderField label={`Analysis Time: Hour ${time}`} value={time} min={0} max={defaults.norm.t_max} step={1} onChange={setTime} />
           </div>
           <button onClick={compare} disabled={loading || scenarios.length < 2}
             className="px-5 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition">

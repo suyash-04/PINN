@@ -39,6 +39,36 @@ DEFAULT_ARCH = dict(
 MODEL_PATH = PROJECT_ROOT / "artifacts" / "model" / "pinn_model.pt"
 DATA_PATH  = PROJECT_ROOT / "artifacts" / "dataset" / "final_data.csv"
 BATCH_PATH = PROJECT_ROOT / "artifacts" / "dataset" / "data_batch.pt"
+NORM_PATH  = PROJECT_ROOT / "artifacts" / "model" / "norm_params.json"
+PARAMS_PATH = PROJECT_ROOT / "params.yaml"
+
+# ── Dynamic override from artifacts ──────────────────────────────────
+import json
+import yaml
+
+if NORM_PATH.exists():
+    try:
+        with open(NORM_PATH, 'r') as f:
+            norm_data = json.load(f)
+            # Map norm_params.json keys to DEFAULT_NORM keys if necessary
+            # norm_params.json: t_max, t_window_start, z_max, psi_min, psi_max, time_unit
+            # DEFAULT_NORM: t_max, z_max, psi_min, psi_max
+            for k in ["t_max", "z_max", "psi_min", "psi_max"]:
+                if k in norm_data:
+                    DEFAULT_NORM[k] = float(norm_data[k])
+    except Exception as e:
+        print(f"Warning: could not load norm_params.json: {e}")
+
+if PARAMS_PATH.exists():
+    try:
+        with open(PARAMS_PATH, 'r') as f:
+            params_data = yaml.safe_load(f)
+            if 'geo_params' in params_data:
+                DEFAULT_GEO.update(params_data['geo_params'])
+            if 'architecture' in params_data:
+                DEFAULT_ARCH.update(params_data['architecture'])
+    except Exception as e:
+        print(f"Warning: could not load params.yaml: {e}")
 
 
 # ─────────────────────────────────────────────────────────────────────

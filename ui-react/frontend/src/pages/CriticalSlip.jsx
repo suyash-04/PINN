@@ -43,7 +43,7 @@ export default function CriticalSlip() {
       <PageHeader title="Critical Slip Surface" subtitle="Identification of the most critical failure depth over time" icon="⚠️" />
 
       <Card>
-        <SliderField label={`Time: Day ${time}`} value={time} min={0} max={123} step={1} onChange={setTime} />
+        <SliderField label={`Time: Hour ${time}`} value={time} min={0} max={defaults.norm.t_max} step={1} onChange={setTime} />
       </Card>
 
       {!data ? <Spinner /> : (

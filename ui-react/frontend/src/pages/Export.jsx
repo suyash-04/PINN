@@ -29,7 +29,7 @@ export default function Export() {
     try {
       const result = await api.exportData({
         z_min: 0.5, z_max: 40, z_res: 50,
-        t_min: 0, t_max: norm.t_max, t_res: 50,
+        t_min: 0, t_max: defaults.norm.t_max, t_res: 50,
         geo, norm,
       });
       // Create download from the response

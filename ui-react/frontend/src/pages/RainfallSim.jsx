@@ -100,7 +100,7 @@ export default function RainfallSim() {
                 data={[{
                   z: results.profiles.map(p => p.psi_wet.map((w, i) => w - p.psi_dry[i])),
                   x: results.profiles[0].depths,
-                  y: results.profiles.map(p => `Day ${p.time}`),
+                  y: results.profiles.map(p => `Hour ${p.time}`),
                   type: 'heatmap', colorscale: 'RdBu',
                   colorbar: { title: { text: 'Δψ (m)', side: 'right' }, thickness: 15 },
                 }]}

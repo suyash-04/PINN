@@ -100,7 +100,7 @@ We wish to extend our utmost gratitude and deepest respect to our supervisor, Pr
 
 Rainfall-induced landslides claim hundreds of lives annually across Nepal's Himalayan region. Because real-time tracking of subsurface pore-water pressure is operationally infeasible for most unmonitored slopes, this project develops a Hybrid Physics-Informed Neural Network (PINN) to act as a virtual sensor. Trained on physically consistent synthetic data, the model evaluates slope stability at any depth and time in milliseconds without requiring in-situ field instrumentation.
 
-The framework is applied to Nepal's catastrophic 2014 Jure landslide. HYDRUS-1D serves as a teacher model, simulating 1D vertical unsaturated infiltration governed by the Richards equation to generate 24,000 pseudo-data points of pressure head $\psi(z,t)$. The PINN is trained using a physics-aware loss function that enforces the Richards equation via automatic differentiation, satisfies boundary conditions, and aligns with anchor data using Adam and L-BFGS optimisation. The Factor of Safety is computed using the infinite-slope stability model with Van Genuchten--Mualem hydraulic properties.
+The framework is applied to Nepal's catastrophic 2014 Jure landslide. HYDRUS-1D serves as a teacher model, simulating 1D vertical unsaturated infiltration governed by the Richards equation to generate physically consistent pseudo-data points of pressure head $\psi(z,t)$. The PINN is trained on a 14-day critical window (334 hours) using a physics-aware loss function that enforces the Richards equation via automatic differentiation, satisfies boundary conditions, and aligns with 1,000 anchor points and 18,412 failure points using Adam and L-BFGS optimisation. The Factor of Safety is computed using the infinite-slope stability model with Van Genuchten--Mualem hydraulic properties.
 
 The trained PINN achieved a 99.99\% reduction in the Richards equation residual and reproduced the reference pressure head field with a relative RMSE of 0.16\%. It successfully identified the critical stability transition depth ($z = 1.16$--$1.19$ m) within 4.1\% of the HYDRUS reference. Evaluating 2,880 query points in under 50 milliseconds—three to four orders of magnitude faster than traditional solvers—the model is deployed via an interactive dashboard and REST API. This framework establishes a technical foundation for low-cost, real-time early warning systems and transfer learning across the unmonitored Hindu Kush Himalayan region.
 
@@ -203,10 +203,7 @@ Jure landslide as the primary case study. The specific objectives are:
 
 This project implements a complete end-to-end Hybrid PINN pipeline for
 rainfall-induced landslide analysis applied to the 2014 Jure landslide,
-Sindhupalchok, Nepal. The framework models 1D vertical unsaturated
-infiltration over a 55 m soil column using HYDRUS-1D-generated
-pseudo-data (24,000 points across 123 days) as anchor data, directly
-addressing the data-scarcity challenge of unmonitored Himalayan slopes.
+Sindhupalchok, Nepal. The framework models 1D vertical unsaturated infiltration over a 55 m soil column using HYDRUS-1D-generated pseudo-data (1,000 anchor points across a 14-day / 334-hour window) as anchor data, directly addressing the data-scarcity challenge of unmonitored Himalayan slopes.
 
 The trained PINN approximates the continuous pressure head field
 $\psi(z,t)$ using a 7-layer, 64-neuron-per-layer architecture with
@@ -341,20 +338,20 @@ for both HYDRUS-1D and PINN inputs.
 \textbf{Adopted Value} \\
 \hline
 \multirow{6}{*}{\textbf{Hydraulic}}
-    & Saturated Hydraulic Conductivity & $K_s$       & $1.5\times10^{-5}$ m/s \\
+    & Saturated Hydraulic Conductivity & $K_s$       & $5.56\times10^{-6}$ m/s \\
     & Saturated Water Content          & $\theta_s$  & 0.45 \\
-    & Residual Water Content           & $\theta_r$  & 0.05 \\
-    & Van Genuchten Alpha              & $\alpha$    & 0.8 m$^{-1}$ \\
+    & Residual Water Content           & $\theta_r$  & 0.06 \\
+    & Van Genuchten Alpha              & $\alpha$    & 1.8 m$^{-1}$ \\
     & Pore-size Distribution Index     & $n$         & 1.4 \\
     & Tortuosity / Connectivity        & $l$         & 0.5 \\
 \hline
 \multirow{3}{*}{\textbf{Geotechnical}}
-    & Effective Cohesion               & $c'$        & 5.0 kPa \\
-    & Effective Friction Angle         & $\phi'$     & 28° \\
-    & Bulk Unit Weight                 & $\gamma$    & 20.0 kN/m$^3$ \\
+    & Effective Cohesion               & $c'$        & 115.0 kPa \\
+    & Effective Friction Angle         & $\phi'$     & 34.5° \\
+    & Bulk Unit Weight                 & $\gamma$    & 18.5 kN/m$^3$ \\
 \hline
 \multirow{3}{*}{\textbf{Topographic}}
-    & Slope Angle                      & $\beta$     & 42° \\
+    & Slope Angle                      & $\beta$     & 43° \\
     & Vertical Depth                   & $z$         & 0--55 m \\
     & Unit Weight of Water             & $\gamma_w$  & 9.81 kN/m$^3$ \\
 \hline
@@ -486,9 +483,8 @@ network to ensure numerical stability and prevent vanishing gradients:
 \tilde{\psi} = \frac{\psi - \psi_{\min}}{\psi_{\max} - \psi_{\min}}
 \end{equation}
 
-where $z_{\max} = 55.0$ m, $t_{\max} = 123.0$ days,
-$\psi_{\min} = -500.0$ m, and $\psi_{\max} = -46.91$ m
-(range = 453.09 m), derived directly from the HYDRUS training data.
+where $z_{\max} = 55.0$ m, $t_{\max} = 334.0$ hours,
+$\psi_{\min} = -2.540$ m, and $\psi_{\max} = 1.737$ m, derived directly from the HYDRUS training data.
 De-normalisation is applied inside the loss function to recover
 physical units before computing PDE residuals and hydraulic properties.
 
@@ -657,7 +653,7 @@ moisture-dependent dynamic unit weight. The penalty is:
 
 \subsection{Two-Phase Optimisation Strategy}
 
-\textbf{Phase I — Adam with StepLR (10,000 epochs):}
+\textbf{Phase I — Adam with StepLR (5,000 epochs):}
 The Adam optimiser is used with an initial learning rate of
 $\eta = 5 \times 10^{-4}$. A StepLR scheduler halves the learning
 rate every 2,000 epochs, producing the schedule:
@@ -685,8 +681,7 @@ when all iterations run inside a single \texttt{.step()} call.
     $\partial\psi/\partial t$, and $\partial^2\psi/\partial z^2$
     at collocation points
     \item \textbf{Collocation sampling:} \texttt{scipy.stats.qmc.LatinHypercube}
-    \item \textbf{Hardware:} CPU (Intel); no GPU required for
-    inference after training
+    \item \textbf{Hardware:} MPS (Metal Performance Shaders) on Apple Silicon; GPU acceleration was used for training, while only CPU is required for inference after training.
     \item \textbf{Normalisation:} All coordinates and outputs
     normalised to $[0, 1]$; physical de-normalisation applied
     inside the loss function before PDE evaluation
