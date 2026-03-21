@@ -1,94 +1,110 @@
+// PDEResidual.jsx
 import { useState, useEffect } from 'react';
 import { api } from '../api';
 import { useApp } from '../context';
-import { PageHeader, Spinner, Card, MetricCard, Tabs } from '../components/ui';
-import Chart, { COLORS } from '../components/Chart';
+import { PageHeader, Spinner, Card, MetricCard, SectionTitle } from '../components/ui';
+import Chart from '../components/Chart';
 
 export default function PDEResidual() {
   const { geo, norm } = useApp();
-  const [res, setRes] = useState(null);
+  const [res, setRes]       = useState(null);
   const [gridRes, setGridRes] = useState(20);
 
   useEffect(() => {
+    setRes(null);
     api.getPDEResidual({
       z_min: 0.5, z_max: 40.0, z_res: gridRes,
-      t_min: 0.0, t_max: 123.0, t_res: gridRes,
+      t_min: 0.0, t_max: norm.t_max, t_res: gridRes,
       geo, norm,
     }).then(setRes);
   }, [geo, norm, gridRes]);
 
-  if (!res) return <Spinner />;
-
-  const absGrid = res.abs_residual; // 2D array [z_res x t_res]
-  const flatAbs = absGrid.flat();
-  const maxR = res.stats.max;
-  const meanR = res.stats.mean;
-  const medR = res.stats.median;
-
-  // Log10 transform for heatmap
-  const heatZ = absGrid.map(row => row.map(v => Math.log10(v + 1e-12)));
-  const tVals = res.t;
-  const zVals = res.z;
-
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
-      <PageHeader title="PDE Residual Analysis" subtitle="Richards' equation residual: how well the PINN satisfies the governing physics" icon="📐" />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 1100 }}>
+      <PageHeader
+        title="PDE Residual"
+        subtitle="Richards' equation residual — how well the PINN satisfies the governing physics"
+        badge="Physics check"
+      />
 
-      <div className="grid grid-cols-3 gap-3">
-        <MetricCard label="Max |R|" value={maxR.toExponential(2)} color="red" />
-        <MetricCard label="Mean |R|" value={meanR.toExponential(2)} color="amber" />
-        <MetricCard label="Median |R|" value={medR.toExponential(2)} color="green" />
-      </div>
-
+      {/* Grid resolution buttons */}
       <Card>
-        <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-slate-700">Residual Heatmap (log₁₀ scale)</h3>
-          <div className="flex items-center gap-2 text-xs text-slate-500">
-            <span>Grid:</span>
-            {[10, 15, 20, 30].map(g => (
-              <button key={g} onClick={() => setGridRes(g)}
-                className={`px-2 py-1 rounded ${gridRes === g ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
-                {g}×{g}
-              </button>
-            ))}
-          </div>
-        </div>
-        <Chart
-          data={[{
-            z: heatZ, x: tVals, y: zVals, type: 'heatmap',
-            colorscale: 'RdYlGn', reversescale: true,
-            colorbar: { title: { text: 'log₁₀|R|', side: 'right' }, thickness: 15 },
-          }]}
-          layout={{
-            xaxis: { title: 'Time (days)' }, yaxis: { title: 'Depth (m)', autorange: 'reversed' },
-            height: 480,
-          }}
-        />
-      </Card>
-
-      {/* Histogram */}
-      <Card>
-        <h3 className="text-sm font-semibold text-slate-700 mb-2">Residual Distribution</h3>
-        <Chart
-          data={[{
-            x: flatAbs.map(v => Math.log10(v + 1e-12)), type: 'histogram', nbinsx: 40,
-            marker: { color: '#6366f1' }, name: 'log₁₀|R|',
-          }]}
-          layout={{
-            xaxis: { title: 'log₁₀|Residual|' }, yaxis: { title: 'Count' }, height: 350,
-            bargap: 0.05,
-          }}
-        />
-      </Card>
-
-      <Card>
-        <h3 className="text-sm font-semibold text-slate-700 mb-2">📘 Interpretation</h3>
-        <div className="text-xs text-slate-600 space-y-1">
-          <p>The PDE residual measures how well the PINN satisfies Richards' equation: <code>R = C(ψ)·∂ψ/∂t − ∂/∂z[K(ψ)·(∂ψ/∂z + 1)]</code></p>
-          <p>Lower values indicate better physics compliance. Green regions satisfy the PDE well; red regions have higher violation.</p>
-          <p>Residuals should ideally be O(10⁻³) or smaller for a well-trained PINN.</p>
+        <SectionTitle>Grid resolution</SectionTitle>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {[10, 15, 20, 30, 40].map(g => (
+            <button key={g} onClick={() => setGridRes(g)} style={{
+              padding: '4px 14px', fontSize: 11, fontFamily: 'var(--font-mono)', cursor: 'pointer',
+              borderRadius: 4, border: gridRes === g ? '1px solid var(--accent)' : '1px solid var(--border)',
+              background: gridRes === g ? 'rgba(47,129,247,.15)' : 'transparent',
+              color: gridRes === g ? 'var(--accent)' : 'var(--muted)',
+            }}>
+              {g}×{g}
+            </button>
+          ))}
         </div>
       </Card>
+
+      {!res
+        ? <Spinner text="Computing PDE residuals…" />
+        : <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12 }}>
+              <MetricCard label="Max |R|"    value={res.stats.max.toExponential(2)}    color="red" />
+              <MetricCard label="Mean |R|"   value={res.stats.mean.toExponential(2)}   color="amber" />
+              <MetricCard label="Median |R|" value={res.stats.median.toExponential(2)} color="green" />
+            </div>
+
+            <Card>
+              <SectionTitle>Residual heatmap — log₁₀ scale</SectionTitle>
+              <Chart
+                data={[{
+                  z: res.abs_residual.map(row => row.map(v => Math.log10(v + 1e-14))),
+                  x: res.t, y: res.z, type: 'heatmap',
+                  colorscale: 'RdYlGn', reversescale: true,
+                  colorbar: { title: { text: 'log₁₀|R|', side: 'right' }, thickness: 14,
+                    tickfont: { size: 10, color: '#7d8590' },
+                    tickcolor: '#30363d', outlinecolor: '#21262d' },
+                  hovertemplate: 'Day: %{x:.1f}<br>Depth: %{y:.1f} m<br>log|R|: %{z:.2f}<extra></extra>',
+                }]}
+                layout={{
+                  xaxis: { title: { text: 'Time (days)', font: { size: 11 } } },
+                  yaxis: { title: { text: 'Depth (m)', font: { size: 11 } }, autorange: 'reversed' },
+                }}
+                height={460}
+              />
+            </Card>
+
+            <Card>
+              <SectionTitle>Residual distribution</SectionTitle>
+              <Chart
+                data={[{
+                  x: res.abs_residual.flat().map(v => Math.log10(v + 1e-14)),
+                  type: 'histogram', nbinsx: 50,
+                  marker: { color: 'rgba(47,129,247,.5)' }, name: 'log₁₀|R|',
+                }]}
+                layout={{
+                  xaxis: { title: { text: 'log₁₀|Residual|', font: { size: 11 } } },
+                  yaxis: { title: { text: 'Count', font: { size: 11 } } },
+                  bargap: 0.04,
+                }}
+                height={300}
+              />
+            </Card>
+
+            <Card>
+              <SectionTitle>Interpretation guide</SectionTitle>
+              <div style={{ fontSize: 11, color: 'var(--muted)', lineHeight: 1.7,
+                fontFamily: 'var(--font-mono)' }}>
+                <div>R = C(ψ)·∂ψ/∂t − ∂/∂z[K(ψ)·(∂ψ/∂z + 1)]</div>
+                <div style={{ marginTop: 8, fontFamily: 'var(--font-sans)' }}>
+                  Green zones satisfy Richards' equation well (log|R| ≪ −3).
+                  Red zones indicate higher PDE violation — typically near the wetting front where
+                  gradients are steepest. Residuals below 10⁻³ are considered acceptable for a
+                  well-trained PINN.
+                </div>
+              </div>
+            </Card>
+          </>
+      }
     </div>
   );
 }

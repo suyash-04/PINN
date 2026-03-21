@@ -1,127 +1,148 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { api } from '../api';
 import { useApp } from '../context';
-import { PageHeader, Spinner, Card, MetricCard } from '../components/ui';
-import Chart, { COLORS } from '../components/Chart';
+import { PageHeader, Spinner, Card, MetricCard, SectionTitle, SliderField, StatusBadge, Button } from '../components/ui';
+import Chart, { COLORS, DANGER } from '../components/Chart';
 
 export default function ParameterExplorer() {
   const { geo, defaults } = useApp();
-  const [time, setTime] = useState(defaults.norm.t_max);
-  const [zMax, setZMax] = useState(40);
+  const tMax = defaults.norm.t_max;
+  const zMax = defaults.norm.z_max;
+
+  const [time, setTime]     = useState(tMax);
   const [profiles, setProfiles] = useState(null);
   const [sensitivity, setSensitivity] = useState(null);
-  const [queryResult, setQueryResult] = useState(null);
+
+  // Point query — React state, no DOM access
+  const [qDepth, setQDepth] = useState(5);
+  const [qTime, setQTime]   = useState(tMax);
+  const [qResult, setQResult] = useState(null);
+
+  const depths = Array.from({ length: 200 }, (_, i) => 0.5 + i * ((zMax - 0.5) / 199));
 
   useEffect(() => {
-    const depths = Array.from({ length: 200 }, (_, i) => 0.5 + i * ((zMax - 0.5) / 199));
-    const defGeo = { ...defaults.geo };
+    setProfiles(null);
     Promise.all([
       api.factorOfSafety({ z: depths, t: Array(200).fill(time), geo }),
-      api.factorOfSafety({ z: depths, t: Array(200).fill(time), geo: defGeo }),
+      api.factorOfSafety({ z: depths, t: Array(200).fill(time), geo: defaults.geo }),
       api.predict({ z: depths, t: Array(200).fill(time) }),
-    ]).then(([fsCur, fsDef, psiData]) => {
-      setProfiles({ depths, fsCurrent: fsCur.fs, fsDefault: fsDef.fs, psi: psiData.psi });
+    ]).then(([fsCur, fsDef, psi]) => {
+      setProfiles({ depths, fsCurrent: fsCur.fs, fsDefault: fsDef.fs, psi: psi.psi });
     });
     api.sensitivity({ z: 10, t: time, geo }).then(setSensitivity);
-  }, [geo, time, zMax, defaults]);
+  }, [geo, time]);
 
-  const query = (z, t) => {
-    api.factorOfSafety({ z: [z], t: [t], geo }).then(r => {
-      api.predict({ z: [z], t: [t] }).then(p => {
-        setQueryResult({ z, t, psi: p.psi[0], fs: r.fs[0] });
-      });
+  const runQuery = useCallback(() => {
+    Promise.all([
+      api.predict({ z: [qDepth], t: [qTime] }),
+      api.factorOfSafety({ z: [qDepth], t: [qTime], geo }),
+    ]).then(([psiRes, fsRes]) => {
+      setQResult({ depth: qDepth, time: qTime, psi: psiRes.psi[0], fs: fsRes.fs[0] });
     });
-  };
+  }, [qDepth, qTime, geo]);
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
-      <PageHeader title="Interactive Parameter Explorer" subtitle="Adjust sidebar parameters to observe real-time effects on stability" icon="🎛️" />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 1400 }}>
+      <PageHeader
+        title="Parameter Explorer"
+        subtitle="Live effect of geotechnical parameters on pressure head and stability"
+        badge="Interactive"
+      />
 
-      <Card className="grid grid-cols-2 gap-4">
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-slate-500">Time: <strong>Hour {time}</strong></label>
-          <input type="range" min={0} max={defaults.norm.t_max} step={1} value={time}
-            onChange={e => setTime(+e.target.value)} className="w-full accent-blue-600" />
-        </div>
-        <div className="space-y-1">
-          <label className="text-xs font-medium text-slate-500">Max depth: <strong>{zMax} m</strong></label>
-          <input type="range" min={5} max={55} step={5} value={zMax}
-            onChange={e => setZMax(+e.target.value)} className="w-full accent-blue-600" />
-        </div>
+      {/* Time slider */}
+      <Card style={{ maxWidth: 500 }}>
+        <SliderField label="Analysis time" value={time} onChange={setTime}
+          min={0} max={tMax} step={1} fmt={v => `Day ${v.toFixed(0)}`} />
       </Card>
 
-      {/* Dual profile plot */}
-      {!profiles ? <Spinner /> : (
-        <Card>
-          <div className="grid lg:grid-cols-2 gap-4">
-            <Chart
-              data={[{ x: profiles.psi, y: profiles.depths, type: 'scatter', mode: 'lines',
-                name: 'ψ (PINN)', line: { color: '#2563eb', width: 2.5 } }]}
-              layout={{ xaxis: { title: 'ψ (m)' }, yaxis: { title: 'Depth (m)', autorange: 'reversed' },
-                height: 450, title: { text: 'Pressure Head ψ(z)', font: { size: 14 } } }}
-            />
-            <Chart
-              data={[
-                { x: profiles.fsCurrent, y: profiles.depths, type: 'scatter', mode: 'lines',
-                  name: 'Current params', line: { color: '#16a34a', width: 2.5 } },
-                { x: profiles.fsDefault, y: profiles.depths, type: 'scatter', mode: 'lines',
-                  name: 'Default params', line: { color: '#94a3b8', width: 2, dash: 'dash' } },
-                { x: [1, 1], y: [0, zMax], mode: 'lines', name: 'FS=1',
-                  line: { color: '#dc2626', dash: 'dash', width: 1.5 }, showlegend: true, type: 'scatter' },
-              ]}
-              layout={{ xaxis: { title: 'Factor of Safety', range: [0, 10] },
-                yaxis: { title: 'Depth (m)', autorange: 'reversed' },
-                height: 450, title: { text: 'Factor of Safety FS(z)', font: { size: 14 } },
-                legend: { orientation: 'h', y: 1.1 } }}
-            />
-          </div>
-        </Card>
-      )}
+      {/* Dual profile */}
+      {!profiles
+        ? <Spinner text="Computing profiles…" />
+        : (
+          <Card>
+            <SectionTitle>ψ and FS depth profiles — current vs default parameters</SectionTitle>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <Chart
+                data={[{ x: profiles.psi, y: profiles.depths, type: 'scatter', mode: 'lines',
+                  name: 'ψ (PINN)', line: { color: '#2f81f7', width: 2 } }]}
+                layout={{
+                  xaxis: { title: { text: 'ψ (m)', font: { size: 11 } } },
+                  yaxis: { title: { text: 'Depth (m)', font: { size: 11 } }, autorange: 'reversed' },
+                }}
+                height={400}
+              />
+              <Chart
+                data={[
+                  { x: profiles.fsCurrent, y: profiles.depths, type: 'scatter', mode: 'lines',
+                    name: 'Current', line: { color: '#3fb950', width: 2 } },
+                  { x: profiles.fsDefault, y: profiles.depths, type: 'scatter', mode: 'lines',
+                    name: 'Default', line: { color: '#7d8590', width: 1.5, dash: 'dot' } },
+                  { x: [1, 1], y: [0, zMax], type: 'scatter', mode: 'lines', name: 'FS = 1',
+                    line: { color: DANGER, dash: 'dash', width: 1.5 }, showlegend: true },
+                ]}
+                layout={{
+                  xaxis: { title: { text: 'Factor of Safety', font: { size: 11 } }, range: [0, 10] },
+                  yaxis: { title: { text: 'Depth (m)', font: { size: 11 } }, autorange: 'reversed' },
+                  legend: { orientation: 'h', y: 1.1, xanchor: 'center', x: 0.5 },
+                }}
+                height={400}
+              />
+            </div>
+          </Card>
+        )
+      }
 
-      {/* Sensitivity */}
+      {/* Sensitivity tornado */}
       {sensitivity && (
         <Card>
-          <h3 className="text-sm font-semibold text-slate-700 mb-2">📊 Sensitivity (FS at 10m depth)</h3>
-          <p className="text-xs text-slate-500 mb-3">Baseline FS = {sensitivity.fs_base.toFixed(3)}</p>
+          <SectionTitle>Sensitivity — ΔFS at z = 10 m, FS₀ = {sensitivity.fs_base.toFixed(3)}</SectionTitle>
           <Chart
             data={[
-              { y: sensitivity.sensitivity.map(s => s.param), x: sensitivity.sensitivity.map(s => s.fs_low),
-                type: 'bar', orientation: 'h', name: '↓ param', marker: { color: '#dc2626' } },
-              { y: sensitivity.sensitivity.map(s => s.param), x: sensitivity.sensitivity.map(s => s.fs_high),
-                type: 'bar', orientation: 'h', name: '↑ param', marker: { color: '#16a34a' } },
+              { y: sensitivity.sensitivity.map(s => s.param),
+                x: sensitivity.sensitivity.map(s => s.fs_low),
+                type: 'bar', orientation: 'h', name: '↓ param',
+                marker: { color: '#f85149' } },
+              { y: sensitivity.sensitivity.map(s => s.param),
+                x: sensitivity.sensitivity.map(s => s.fs_high),
+                type: 'bar', orientation: 'h', name: '↑ param',
+                marker: { color: '#3fb950' } },
             ]}
-            layout={{ barmode: 'relative', xaxis: { title: 'ΔFS' }, height: 300,
-              margin: { l: 130 }, shapes: [{ type: 'line', x0: 0, x1: 0, y0: -0.5, y1: 5.5,
-                line: { color: '#64748b', width: 1 } }] }}
+            layout={{
+              barmode: 'relative',
+              xaxis: { title: { text: 'ΔFS', font: { size: 11 } },
+                zeroline: true, zerolinecolor: '#7d8590', zerolinewidth: 1 },
+              margin: { l: 110, r: 20, t: 20, b: 40 },
+              shapes: [{ type: 'line', x0: 0, x1: 0, y0: -0.5, y1: 5.5,
+                line: { color: '#7d8590', width: 1 } }],
+            }}
+            height={280}
           />
         </Card>
       )}
 
-      {/* Point query */}
+      {/* Point query — pure React state */}
       <Card>
-        <h3 className="text-sm font-semibold text-slate-700 mb-3">🔢 Point Query</h3>
-        <div className="flex gap-3 items-end mb-3">
-          <div>
-            <label className="text-xs text-slate-500">Depth (m)</label>
-            <input type="number" defaultValue={5} min={0.5} max={55} step={0.5} id="qz"
-              className="block w-24 border rounded-lg px-2 py-1.5 text-sm" />
+        <SectionTitle>Point query</SectionTitle>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 16 }}>
+          <div style={{ flex: 1, minWidth: 180 }}>
+            <SliderField label="Depth z" value={qDepth} onChange={setQDepth}
+              min={0.5} max={zMax} step={0.5} fmt={v => `${v.toFixed(1)} m`} />
           </div>
-          <div>
-            <label className="text-xs text-slate-500">Time (hours)</label>
-            <input type="number" defaultValue={defaults.norm.t_max} min={0} max={defaults.norm.t_max} step={1} id="qt"
-              className="block w-24 border rounded-lg px-2 py-1.5 text-sm" />
+          <div style={{ flex: 1, minWidth: 180 }}>
+            <SliderField label="Time t" value={qTime} onChange={setQTime}
+              min={0} max={tMax} step={1} fmt={v => `Day ${v.toFixed(0)}`} />
           </div>
-          <button onClick={() => query(+document.getElementById('qz').value, +document.getElementById('qt').value)}
-            className="bg-blue-600 text-white px-4 py-1.5 rounded-lg text-sm font-medium hover:bg-blue-700 transition">
-            Query
-          </button>
+          <Button onClick={runQuery}>Query →</Button>
         </div>
-        {queryResult && (
-          <div className="grid grid-cols-3 md:grid-cols-5 gap-3">
-            <MetricCard label="ψ (m)" value={queryResult.psi.toFixed(2)} color="blue" />
-            <MetricCard label="FS" value={queryResult.fs.toFixed(3)} color={queryResult.fs >= 1.5 ? 'green' : queryResult.fs >= 1 ? 'amber' : 'red'} />
-            <MetricCard label="Status" value={queryResult.fs >= 1.5 ? '🟢 Safe' : queryResult.fs >= 1 ? '🟡 Marginal' : '🔴 Unstable'}
-              color={queryResult.fs >= 1.5 ? 'green' : queryResult.fs >= 1 ? 'amber' : 'red'} />
+        {qResult && (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
+            <MetricCard label="Depth" value={`${qResult.depth.toFixed(1)} m`} color="muted" />
+            <MetricCard label="Time" value={`Day ${qResult.time}`} color="muted" />
+            <MetricCard label="ψ" value={`${qResult.psi.toFixed(2)} m`} color="amber" />
+            <MetricCard label="FS"
+              value={qResult.fs.toFixed(4)}
+              sub={<StatusBadge fs={qResult.fs} />}
+              color={qResult.fs >= 1.5 ? 'green' : qResult.fs >= 1 ? 'amber' : 'red'} />
           </div>
         )}
       </Card>

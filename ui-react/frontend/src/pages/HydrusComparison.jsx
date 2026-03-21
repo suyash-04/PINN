@@ -1,145 +1,154 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
 import { useApp } from '../context';
-import { PageHeader, Spinner, Card, MetricCard, Tabs } from '../components/ui';
+import { PageHeader, Spinner, Card, MetricCard, Tabs, TimeToggle, SectionTitle, DataTable } from '../components/ui';
 import Chart, { COLORS } from '../components/Chart';
+
+function computeMetrics(hydrus, pinn) {
+  const err = pinn.map((p, i) => p - hydrus[i]);
+  const mean = hydrus.reduce((a, b) => a + b, 0) / hydrus.length;
+  const ssRes = err.reduce((a, e) => a + e * e, 0);
+  const ssTot = hydrus.reduce((a, h) => a + (h - mean) ** 2, 0);
+  return {
+    r2:   1 - ssRes / Math.max(ssTot, 1e-10),
+    rmse: Math.sqrt(ssRes / err.length),
+    mae:  err.reduce((a, e) => a + Math.abs(e), 0) / err.length,
+  };
+}
 
 export default function HydrusComparison() {
   const { defaults } = useApp();
-  const [times, setTimes] = useState([0, 100, 200, 300, 334]);
-  const [data, setData] = useState(null);
-  const [tab, setTab] = useState('overlay');
+  // Use first 5 available timesteps by default — no hardcoding
+  const defaultTimes = defaults.available_times.slice(0, 5);
+  const [times, setTimes] = useState(defaultTimes);
+  const [data, setData]   = useState(null);
+  const [tab, setTab]     = useState('overlay');
 
   useEffect(() => {
-    if (!times.length) return;
+    if (!times.length) { setData(null); return; }
     api.hydrusComparison({ times }).then(d => {
-      // Compute overall metrics from per-time comparisons
       const allHydrus = d.comparisons.flatMap(c => c.psi_hydrus);
-      const allPinn = d.comparisons.flatMap(c => c.psi_pinn);
-      const allErr = allPinn.map((p, i) => p - allHydrus[i]);
-      const meanObs = allHydrus.reduce((a, b) => a + b, 0) / allHydrus.length;
-      const ssRes = allErr.reduce((a, e) => a + e * e, 0);
-      const ssTot = allHydrus.reduce((a, h) => a + (h - meanObs) ** 2, 0);
-      const r2 = 1 - ssRes / Math.max(ssTot, 1e-10);
-      const rmse = Math.sqrt(ssRes / allErr.length);
-      const mae = allErr.reduce((a, e) => a + Math.abs(e), 0) / allErr.length;
-      setData({
-        ...d,
-        overall: { r2, rmse, mae },
-        scatter: { hydrus: allHydrus, pinn: allPinn },
-      });
+      const allPinn   = d.comparisons.flatMap(c => c.psi_pinn);
+      const overall   = computeMetrics(allHydrus, allPinn);
+      setData({ ...d, overall, scatter: { hydrus: allHydrus, pinn: allPinn } });
     });
   }, [times]);
 
-  const toggle = t => setTimes(prev => prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]);
-
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
-      <PageHeader title="HYDRUS-1D vs PINN Comparison" subtitle="Quantitative comparison of simulation data against neural network predictions" icon="🔬" />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 1400 }}>
+      <PageHeader
+        title="HYDRUS-1D vs PINN"
+        subtitle="Quantitative comparison of PINN predictions against reference numerical solutions"
+        badge="Validation"
+      />
 
       <Card>
-        <p className="text-xs font-semibold text-slate-500 mb-2">SELECT TIMESTEPS</p>
-        <div className="flex flex-wrap gap-2">
-          {defaults.available_times.map(t => (
-            <button key={t} onClick={() => toggle(t)}
-              className={`px-3 py-1 text-xs rounded-full font-medium transition
-                ${times.includes(t) ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
-              Hour {t}
-            </button>
-          ))}
-        </div>
+        <SectionTitle>Select timesteps</SectionTitle>
+        <TimeToggle times={defaults.available_times} selected={times} onChange={setTimes} label="Day" />
       </Card>
 
-      {!data ? <Spinner /> : (
-        <>
-          {/* Overall metrics */}
-          <div className="grid grid-cols-3 gap-3">
-            <MetricCard label="R²" value={data.overall.r2.toFixed(4)} color="blue" />
-            <MetricCard label="RMSE (m)" value={data.overall.rmse.toFixed(2)} color="amber" />
-            <MetricCard label="MAE (m)" value={data.overall.mae.toFixed(2)} color="purple" />
-          </div>
-
-          <Card>
-            <Tabs tabs={[
-              { key: 'overlay', label: '📈 Overlay' },
-              { key: 'error', label: '📊 Error Profile' },
-              { key: 'scatter', label: '🔘 Scatter Plot' },
-            ]} active={tab} onChange={setTab} />
-
-            {tab === 'overlay' && (
-              <Chart
-                data={data.comparisons.flatMap((c, i) => [
-                  { x: c.psi_hydrus, y: c.z, type: 'scatter', mode: 'markers',
-                    name: `HYDRUS t=${c.time}hr`, marker: { color: COLORS[i], size: 5, symbol: 'circle-open' },
-                    legendgroup: `t${c.time}` },
-                  { x: c.psi_pinn, y: c.z, type: 'scatter', mode: 'lines',
-                    name: `PINN t=${c.time}hr`, line: { color: COLORS[i], width: 2.5 },
-                    legendgroup: `t${c.time}` },
-                ])}
-                layout={{
-                  xaxis: { title: 'ψ (m)' }, yaxis: { title: 'Depth (m)', autorange: 'reversed' },
-                  height: 520, legend: { orientation: 'h', y: 1.08, xanchor: 'center', x: 0.5 },
-                }}
-              />
-            )}
-
-            {tab === 'error' && (
-              <Chart
-                data={data.comparisons.map((c, i) => ({
-                  x: c.abs_error, y: c.z, type: 'scatter', mode: 'lines+markers',
-                  name: `t=${c.time}hr`, line: { color: COLORS[i] }, marker: { size: 3 },
-                }))}
-                layout={{
-                  xaxis: { title: '|ψ_PINN − ψ_HYDRUS| (m)' },
-                  yaxis: { title: 'Depth (m)', autorange: 'reversed' }, height: 520,
-                }}
-              />
-            )}
-
-            {tab === 'scatter' && (
-              <Chart
-                data={[
-                  { x: data.scatter.hydrus, y: data.scatter.pinn, type: 'scatter', mode: 'markers',
-                    marker: { color: '#2563eb', size: 4, opacity: 0.5 }, name: 'Data' },
-                  { x: [Math.min(...data.scatter.hydrus), Math.max(...data.scatter.hydrus)],
-                    y: [Math.min(...data.scatter.hydrus), Math.max(...data.scatter.hydrus)],
-                    type: 'scatter', mode: 'lines', line: { color: '#dc2626', dash: 'dash' }, name: '1:1' },
-                ]}
-                layout={{
-                  xaxis: { title: 'ψ HYDRUS (m)' }, yaxis: { title: 'ψ PINN (m)' }, height: 500,
-                  annotations: [{ x: 0.05, y: 0.95, xref: 'paper', yref: 'paper', showarrow: false,
-                    text: `R²=${data.overall.r2.toFixed(4)}<br>RMSE=${data.overall.rmse.toFixed(2)}m`,
-                    font: { size: 13 }, bgcolor: '#f1f5f9', bordercolor: '#cbd5e1', borderpad: 6 }],
-                }}
-              />
-            )}
-          </Card>
-
-          {/* Per-time stats table */}
-          <Card>
-            <h3 className="text-sm font-semibold text-slate-700 mb-3">📋 Per-Timestep Statistics</h3>
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b text-left text-slate-500">
-                    <th className="p-2">Time (hr)</th><th className="p-2">R²</th><th className="p-2">RMSE</th><th className="p-2">MAE</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.comparisons.map(c => (
-                    <tr key={c.time} className="border-b border-slate-100">
-                      <td className="p-2 font-medium">{c.time}</td>
-                      <td className="p-2">{c.r2.toFixed(4)}</td>
-                      <td className="p-2">{c.rmse.toFixed(3)}</td>
-                      <td className="p-2">{c.mae.toFixed(3)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+      {!data
+        ? <Spinner text="Running comparison…" />
+        : <>
+            {/* Overall metrics */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12 }}>
+              <MetricCard label="Overall R²"   value={data.overall.r2.toFixed(5)}   color="blue" />
+              <MetricCard label="RMSE (m)"     value={data.overall.rmse.toFixed(4)}  color="amber" />
+              <MetricCard label="MAE (m)"      value={data.overall.mae.toFixed(4)}   color="purple" />
             </div>
-          </Card>
-        </>
-      )}
+
+            <Card>
+              <Tabs
+                tabs={[
+                  { key: 'overlay', label: 'Profile overlay' },
+                  { key: 'error',   label: 'Error profiles' },
+                  { key: 'scatter', label: 'Scatter plot' },
+                  { key: 'table',   label: 'Statistics table' },
+                ]}
+                active={tab} onChange={setTab}
+              />
+
+              {tab === 'overlay' && (
+                <Chart
+                  data={data.comparisons.flatMap((c, i) => [
+                    { x: c.psi_hydrus, y: c.z, type: 'scatter', mode: 'markers',
+                      name: `HYDRUS day ${c.time}`,
+                      marker: { color: COLORS[i % COLORS.length], size: 4, symbol: 'circle-open' },
+                      legendgroup: `t${c.time}` },
+                    { x: c.psi_pinn, y: c.z, type: 'scatter', mode: 'lines',
+                      name: `PINN day ${c.time}`,
+                      line: { color: COLORS[i % COLORS.length], width: 2 },
+                      legendgroup: `t${c.time}` },
+                  ])}
+                  layout={{
+                    xaxis: { title: { text: 'ψ (m)', font: { size: 11 } } },
+                    yaxis: { title: { text: 'Depth (m)', font: { size: 11 } }, autorange: 'reversed' },
+                    legend: { orientation: 'h', y: 1.1, xanchor: 'center', x: 0.5 },
+                  }}
+                  height={520}
+                />
+              )}
+
+              {tab === 'error' && (
+                <Chart
+                  data={data.comparisons.map((c, i) => ({
+                    x: c.abs_error, y: c.z, type: 'scatter', mode: 'lines+markers',
+                    name: `Day ${c.time}`,
+                    line: { color: COLORS[i % COLORS.length], width: 1.8 },
+                    marker: { size: 3 },
+                  }))}
+                  layout={{
+                    xaxis: { title: { text: '|ψ_PINN − ψ_HYDRUS| (m)', font: { size: 11 } } },
+                    yaxis: { title: { text: 'Depth (m)', font: { size: 11 } }, autorange: 'reversed' },
+                  }}
+                  height={520}
+                />
+              )}
+
+              {tab === 'scatter' && (() => {
+                const psiMin = Math.min(...data.scatter.hydrus);
+                const psiMax = Math.max(...data.scatter.hydrus);
+                return (
+                  <Chart
+                    data={[
+                      { x: data.scatter.hydrus, y: data.scatter.pinn, type: 'scatter', mode: 'markers',
+                        marker: { color: '#2f81f7', size: 3, opacity: 0.45 }, name: 'Points' },
+                      { x: [psiMin, psiMax], y: [psiMin, psiMax], type: 'scatter', mode: 'lines',
+                        line: { color: '#f85149', dash: 'dash', width: 1.5 }, name: '1:1 line' },
+                    ]}
+                    layout={{
+                      xaxis: { title: { text: 'ψ HYDRUS (m)', font: { size: 11 } } },
+                      yaxis: { title: { text: 'ψ PINN (m)', font: { size: 11 } } },
+                      annotations: [{
+                        x: 0.05, y: 0.97, xref: 'paper', yref: 'paper', showarrow: false,
+                        text: `R² = ${data.overall.r2.toFixed(5)}<br>RMSE = ${data.overall.rmse.toFixed(3)} m`,
+                        font: { size: 11, color: '#e6edf3', family: "'IBM Plex Mono', monospace" },
+                        align: 'left', bgcolor: 'rgba(22,27,34,.85)',
+                        bordercolor: '#30363d', borderpad: 6,
+                      }],
+                    }}
+                    height={500}
+                  />
+                );
+              })()}
+
+              {tab === 'table' && (
+                <DataTable
+                  columns={[
+                    { key: 'time', label: 'Day' },
+                    { key: 'r2',   label: 'R²',   render: v => v?.toFixed(5) },
+                    { key: 'rmse', label: 'RMSE (m)', render: v => v?.toFixed(4) },
+                    { key: 'mae',  label: 'MAE (m)',  render: v => v?.toFixed(4) },
+                    { key: 'r2',   label: 'Quality',
+                      render: v => v > 0.99 ? '✓ Excellent' : v > 0.95 ? '~ Good' : '✗ Review' },
+                  ]}
+                  rows={data.comparisons}
+                  keyFn={r => r.time}
+                />
+              )}
+            </Card>
+          </>
+      }
     </div>
   );
 }

@@ -1,89 +1,105 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
 import { useApp } from '../context';
-import { PageHeader, Spinner, Card } from '../components/ui';
+import { PageHeader, Spinner, Card, TimeToggle, SectionTitle, SliderField } from '../components/ui';
 import Chart, { COLORS } from '../components/Chart';
 
 export default function PressureHead() {
   const { defaults } = useApp();
-  const [selectedTimes, setSelectedTimes] = useState([0, Math.floor(defaults.norm.t_max * 0.5), Math.floor(defaults.norm.t_max * 0.75), defaults.norm.t_max]);
+  const tMax = defaults.norm.t_max;
+  const zMax = defaults.norm.z_max;
+
+  const defaultTimes = defaults.available_times.slice(0, 4);
+  const [selectedTimes, setSelectedTimes] = useState(defaultTimes);
   const [depth, setDepth] = useState(5);
-  const [data, setData] = useState(null);
-  const [timeData, setTimeData] = useState(null);
+  const [profiles, setProfiles] = useState(null);
+  const [timeSeries, setTimeSeries] = useState(null);
+
+  const depths200 = Array.from({ length: 200 }, (_, i) => 0.5 + i * (zMax / 200));
 
   useEffect(() => {
-    if (!selectedTimes.length) return;
-    const depths = Array.from({ length: 200 }, (_, i) => 0.5 + i * (50 / 200));
-    Promise.all(selectedTimes.map(t =>
-      api.predict({ z: depths, t: Array(200).fill(t) })
-    )).then(profiles => setData({ profiles, depths }));
+    if (!selectedTimes.length) { setProfiles(null); return; }
+    Promise.all(
+      selectedTimes.map(t => api.predict({ z: depths200, t: Array(200).fill(t) }))
+    ).then(res => setProfiles(res));
   }, [selectedTimes]);
 
   useEffect(() => {
-    const times = Array.from({ length: 200 }, (_, i) => i * (defaults.norm.t_max / 199));
+    const times = Array.from({ length: 200 }, (_, i) => i * (tMax / 199));
     api.predict({ z: Array(200).fill(depth), t: times }).then(d =>
-      setTimeData({ times, psi: d.psi })
+      setTimeSeries({ times, psi: d.psi })
     );
-  }, [depth, defaults]);
-
-  const toggle = (t) => setSelectedTimes(prev =>
-    prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]
-  );
+  }, [depth, tMax]);
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
-      <PageHeader title="Pressure Head Profiles — ψ(z, t)" subtitle="Pore-water pressure vs depth at selected timesteps" icon="📈" />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 1400 }}>
+      <PageHeader
+        title="Pressure Head  ψ(z, t)"
+        subtitle="PINN-predicted pore-water suction profiles across depth and time"
+        badge="Hydraulics"
+      />
 
-      {/* Time selector */}
       <Card>
-        <p className="text-xs font-semibold text-slate-500 mb-2">SELECT TIMESTEPS</p>
-        <div className="flex flex-wrap gap-2">
-          {defaults.available_times.map(t => (
-            <button key={t} onClick={() => toggle(t)}
-              className={`px-3 py-1 text-xs rounded-full font-medium transition
-                ${selectedTimes.includes(t) ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}>
-              Hour {t}
-            </button>
-          ))}
-        </div>
+        <SectionTitle>Select timesteps</SectionTitle>
+        <TimeToggle
+          times={defaults.available_times}
+          selected={selectedTimes}
+          onChange={setSelectedTimes}
+          label="Day"
+        />
       </Card>
 
-      {/* Profile plot */}
-      {!data ? <Spinner /> : (
-        <Card>
-          <Chart
-            data={data.profiles.map((p, i) => ({
-              x: p.psi, y: data.depths, type: 'scatter', mode: 'lines',
-              name: `Hour ${selectedTimes[i]}`, line: { color: COLORS[i % COLORS.length], width: 2.5 },
-            }))}
-            layout={{
-              xaxis: { title: 'Pressure Head ψ (m)' },
-              yaxis: { title: 'Depth z (m)', autorange: 'reversed' },
-              height: 550, legend: { orientation: 'h', y: 1.08, xanchor: 'center', x: 0.5 },
-            }}
-          />
-        </Card>
-      )}
+      {!profiles
+        ? <Spinner text="Fetching profiles…" />
+        : (
+          <Card>
+            <SectionTitle>ψ vs Depth — selected timesteps</SectionTitle>
+            <Chart
+              data={profiles.map((p, i) => ({
+                x: p.psi, y: depths200, type: 'scatter', mode: 'lines',
+                name: `Day ${selectedTimes[i]}`,
+                line: { color: COLORS[i % COLORS.length], width: 2 },
+              }))}
+              layout={{
+                xaxis: { title: { text: 'Pressure Head ψ (m)', font: { size: 11 } } },
+                yaxis: { title: { text: 'Depth z (m)', font: { size: 11 } }, autorange: 'reversed' },
+                legend: { orientation: 'h', y: 1.12, xanchor: 'center', x: 0.5 },
+              }}
+              height={480}
+            />
+          </Card>
+        )
+      }
 
-      {/* ψ vs Time */}
       <Card>
-        <h3 className="text-sm font-semibold text-slate-700 mb-3">ψ vs Time at Fixed Depth</h3>
-        <input type="range" min={0.5} max={50} step={0.5} value={depth}
-          onChange={e => setDepth(+e.target.value)}
-          className="w-full accent-blue-600 mb-1" />
-        <p className="text-xs text-slate-500 mb-3">Depth: <strong>{depth} m</strong></p>
-        {!timeData ? <Spinner /> : (
-          <Chart
-            data={[{
-              x: timeData.times, y: timeData.psi, type: 'scatter', mode: 'lines',
-              line: { color: '#2563eb', width: 2.5 }, fill: 'tozeroy',
-              fillcolor: 'rgba(37,99,235,0.06)', name: `ψ at z=${depth}m`,
-            }]}
-            layout={{
-              xaxis: { title: 'Time (days)' }, yaxis: { title: 'ψ (m)' }, height: 380,
-            }}
+        <SectionTitle>ψ vs Time — at fixed depth</SectionTitle>
+        <div style={{ marginBottom: 16, maxWidth: 380 }}>
+          <SliderField
+            label="Depth z"
+            value={depth}
+            onChange={setDepth}
+            min={0.5} max={zMax} step={0.5}
+            fmt={v => `${v.toFixed(1)} m`}
           />
-        )}
+        </div>
+        {!timeSeries
+          ? <Spinner text="Loading time series…" />
+          : (
+            <Chart
+              data={[{
+                x: timeSeries.times, y: timeSeries.psi, type: 'scatter', mode: 'lines',
+                name: `ψ at z = ${depth} m`,
+                line: { color: '#2f81f7', width: 2 },
+                fill: 'tozeroy', fillcolor: 'rgba(47,129,247,.06)',
+              }]}
+              layout={{
+                xaxis: { title: { text: 'Time (days)', font: { size: 11 } } },
+                yaxis: { title: { text: 'ψ (m)', font: { size: 11 } } },
+              }}
+              height={340}
+            />
+          )
+        }
       </Card>
     </div>
   );

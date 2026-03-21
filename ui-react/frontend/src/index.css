@@ -1,1 +1,35 @@
 @import "tailwindcss";
+
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600;700&display=swap');
+
+:root {
+  --bg:       #0d1117;
+  --surface:  #161b22;
+  --border:   #21262d;
+  --border2:  #30363d;
+  --text:     #e6edf3;
+  --muted:    #7d8590;
+  --accent:   #2f81f7;
+  --accent-2: #3fb950;
+  --warn:     #d29922;
+  --danger:   #f85149;
+  --purple:   #a371f7;
+
+  --font-sans: 'IBM Plex Sans', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'Fira Code', monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { font-family: var(--font-sans); background: var(--bg); color: var(--text); }
+
+body { margin: 0; overflow: hidden; height: 100vh; }
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+
+/* Plotly overrides */
+.js-plotly-plot .plotly .modebar { opacity: 0.4; }
+.js-plotly-plot .plotly .modebar:hover { opacity: 1; }

@@ -1,116 +1,177 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
 import { useApp } from '../context';
-import { MetricCard, PageHeader, Spinner } from '../components/ui';
+import { MetricCard, Card, Spinner, StatusBadge, SectionTitle } from '../components/ui';
 import Chart, { COLORS } from '../components/Chart';
 
 export default function Overview() {
   const { geo, defaults } = useApp();
-  const [profiles, setProfiles] = useState(null);
+  const [data, setData] = useState(null);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
-    const times = [0, 30, 60, 90, 96, 123];
+    const refDepth = 5;
+    const refTime = defaults.norm.t_max;
+    // Use actual available timesteps from the backend
+    const times = defaults.available_times.slice(0, 6);
+    const depths100 = Array.from({ length: 100 }, (_, i) => 0.5 + i * (defaults.norm.z_max / 100));
+
     Promise.all([
-      api.predict({ z: [5], t: [96] }),
-      api.factorOfSafety({ z: [5], t: [96], geo }),
-      ...times.map(t => api.predict({ z: Array.from({ length: 100 }, (_, i) => 0.5 + i * 0.5), t: Array(100).fill(t) })),
-      ...times.map(t => api.factorOfSafety({ z: Array.from({ length: 100 }, (_, i) => 0.5 + i * 0.5), t: Array(100).fill(t), geo })),
-    ]).then(([psiPoint, fsPoint, ...rest]) => {
-      const psiProfiles = rest.slice(0, times.length);
-      const fsProfiles = rest.slice(times.length);
-      setProfiles({ psiPoint, fsPoint, psiProfiles, fsProfiles, times });
-    });
-  }, [geo]);
+      api.predict({ z: [refDepth], t: [refTime] }),
+      api.factorOfSafety({ z: [refDepth], t: [refTime], geo }),
+      ...times.map(t => api.predict({ z: depths100, t: Array(100).fill(t) })),
+      ...times.map(t => api.factorOfSafety({ z: depths100, t: Array(100).fill(t), geo })),
+    ])
+      .then(([psiPt, fsPt, ...rest]) => {
+        setData({
+          psiVal: psiPt.psi[0],
+          fsVal: fsPt.fs[0],
+          psiProfiles: rest.slice(0, times.length),
+          fsProfiles: rest.slice(times.length),
+          depths: depths100,
+          times,
+          refDepth,
+          refTime,
+        });
+      })
+      .catch(e => setError(e.message));
+  }, [geo, defaults]);
 
-  if (!profiles) return <Spinner text="Computing overview…" />;
+  if (error) return <ErrorCard msg={error} />;
+  if (!data) return <Spinner text="Computing overview…" />;
 
-  const depths = Array.from({ length: 100 }, (_, i) => 0.5 + i * 0.5);
-  const psiVal = profiles.psiPoint.psi[0].toFixed(1);
-  const fsVal = profiles.fsPoint.fs[0];
-  const fsLabel = fsVal >= 1.5 ? '🟢 Safe' : fsVal >= 1.0 ? '🟡 Marginal' : '🔴 Unstable';
+  const { psiVal, fsVal, psiProfiles, fsProfiles, depths, times } = data;
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
-      {/* Header */}
-      <div className="bg-gradient-to-r from-blue-700 to-blue-900 rounded-2xl p-6 text-white">
-        <h1 className="text-2xl font-bold">🏔️ PINN Landslide Stability Dashboard</h1>
-        <p className="text-blue-200 mt-1">Physics-Informed Neural Network for slope stability under rainfall infiltration</p>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 1400 }}>
+
+      {/* Header banner */}
+      <div style={{ padding: '16px 20px', borderRadius: 8,
+        background: 'linear-gradient(135deg, rgba(47,129,247,.12) 0%, rgba(163,113,247,.08) 100%)',
+        border: '1px solid rgba(47,129,247,.2)' }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)',
+          letterSpacing: '-0.02em' }}>
+          PINN Landslide Stability Dashboard
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--muted)', marginTop: 4,
+          fontFamily: 'var(--font-mono)' }}>
+          Physics-Informed Neural Network · Richards Equation · Jure 2014 · 
+          {' '}{defaults.n_data_points?.toLocaleString()} training points
+        </div>
       </div>
 
-      {/* Metrics */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <MetricCard label="Data Points" value={defaults.n_data_points?.toLocaleString()} color="blue" />
-        <MetricCard label="Time Span" value={`0 – ${defaults.norm.t_max} hr`} color="purple" />
-        <MetricCard label="Depth Range" value={`${defaults.depth_range[0]} – ${defaults.depth_range[1]} m`} color="blue" />
-        <MetricCard label={`ψ at 5m, Hour ${defaults.norm.t_max}`} value={`${psiVal} m`} color="amber" />
-        <MetricCard label={`FS at 5m, Hour ${defaults.norm.t_max}`} value={fsVal.toFixed(2)} sub={fsLabel} color={fsVal >= 1.5 ? 'green' : fsVal >= 1 ? 'amber' : 'red'} />
+      {/* KPI row */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5,1fr)', gap: 12 }}>
+        <MetricCard label="Training points" value={defaults.n_data_points?.toLocaleString()} color="blue" />
+        <MetricCard label="Time span" value={`0 – ${defaults.norm.t_max} d`} color="muted" />
+        <MetricCard label="Depth range"
+          value={`${defaults.depth_range?.[0]} – ${defaults.depth_range?.[1]} m`} color="muted" />
+        <MetricCard label={`ψ at 5 m, day ${defaults.norm.t_max}`}
+          value={`${psiVal.toFixed(1)} m`} color="amber" />
+        <MetricCard label={`FS at 5 m, day ${defaults.norm.t_max}`}
+          value={fsVal.toFixed(3)}
+          sub={<StatusBadge fs={fsVal} />}
+          color={fsVal >= 1.5 ? 'green' : fsVal >= 1 ? 'amber' : 'red'} />
       </div>
 
       {/* Charts */}
-      <div className="grid lg:grid-cols-2 gap-4">
-        <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <h3 className="text-sm font-semibold text-slate-700 mb-2">📊 Pressure Head Profiles (PINN)</h3>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+        <Card>
+          <SectionTitle>Pressure Head Profiles — ψ(z)</SectionTitle>
           <Chart
-            data={profiles.psiProfiles.map((p, i) => ({
+            data={psiProfiles.map((p, i) => ({
               x: p.psi, y: depths, type: 'scatter', mode: 'lines',
-              name: `Hour ${profiles.times[i]}`, line: { color: COLORS[i], width: 2 },
+              name: `Day ${times[i]}`,
+              line: { color: COLORS[i], width: 1.8 },
             }))}
             layout={{
-              xaxis: { title: 'ψ (m)' }, yaxis: { title: 'Depth (m)', autorange: 'reversed' },
-              height: 420, legend: { orientation: 'h', y: 1.1 },
+              xaxis: { title: { text: 'ψ (m)', font: { size: 11 } } },
+              yaxis: { title: { text: 'Depth (m)', font: { size: 11 } }, autorange: 'reversed' },
+              legend: { orientation: 'h', y: 1.12, xanchor: 'center', x: 0.5 },
             }}
+            height={380}
           />
-        </div>
-        <div className="bg-white rounded-xl border border-slate-200 p-4">
-          <h3 className="text-sm font-semibold text-slate-700 mb-2">🛡️ Factor of Safety Profiles</h3>
+        </Card>
+        <Card>
+          <SectionTitle>Factor of Safety Profiles — FS(z)</SectionTitle>
           <Chart
             data={[
-              ...profiles.fsProfiles.map((p, i) => ({
+              ...fsProfiles.map((p, i) => ({
                 x: p.fs, y: depths, type: 'scatter', mode: 'lines',
-                name: `Hour ${profiles.times[i]}`, line: { color: COLORS[i], width: 2 },
+                name: `Day ${times[i]}`,
+                line: { color: COLORS[i], width: 1.8 },
               })),
-              { x: [1, 1], y: [0, 50], type: 'scatter', mode: 'lines', name: 'FS=1',
-                line: { color: '#dc2626', dash: 'dash', width: 2 }, showlegend: true },
+              { x: [1, 1], y: [0, defaults.norm.z_max], type: 'scatter', mode: 'lines',
+                name: 'FS = 1', line: { color: '#f85149', dash: 'dash', width: 1.5 },
+                showlegend: true },
             ]}
             layout={{
-              xaxis: { title: 'Factor of Safety', range: [0, 10] },
-              yaxis: { title: 'Depth (m)', autorange: 'reversed' },
-              height: 420, legend: { orientation: 'h', y: 1.1 },
+              xaxis: { title: { text: 'Factor of Safety', font: { size: 11 } }, range: [0, 8] },
+              yaxis: { title: { text: 'Depth (m)', font: { size: 11 } }, autorange: 'reversed' },
+              legend: { orientation: 'h', y: 1.12, xanchor: 'center', x: 0.5 },
             }}
+            height={380}
           />
-        </div>
+        </Card>
       </div>
 
-      {/* About */}
-      <div className="bg-white rounded-xl border border-slate-200 p-6 grid lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-3">
-          <h3 className="font-semibold text-slate-900">📖 About This Project</h3>
-          <p className="text-sm text-slate-600 leading-relaxed">
-            This dashboard visualises a <strong>Physics-Informed Neural Network (PINN)</strong> trained to predict
-            subsurface pore-water pressure and slope stability during a rainfall event on a natural hillslope.
-          </p>
-          <ul className="text-sm text-slate-600 list-disc list-inside space-y-1">
-            <li><strong>Richards' Equation</strong> — unsaturated water flow PDE</li>
-            <li><strong>Van Genuchten</strong> — soil–water retention model</li>
-            <li><strong>Mohr–Coulomb</strong> — shear-strength criterion</li>
-            <li><strong>Infinite-slope</strong> — stability model with matric suction</li>
-          </ul>
-        </div>
-        <div>
-          <h3 className="font-semibold text-slate-900 mb-2">Current Parameters</h3>
-          <div className="text-xs space-y-1">
-            {[['β (slope)', `${geo.beta}°`], ['c′', `${geo.c_prime} kPa`], ['φ′', `${geo.phi_prime}°`],
-              ['γ', `${geo.gamma} kN/m³`], ['Ks', `${geo.Ks.toExponential(2)} m/s`],
-              ['θs', geo.theta_s], ['θr', geo.theta_r], ['α', `${geo.alpha} 1/m`], ['n', geo.n]
+      {/* Model + params info row */}
+      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 16 }}>
+        <Card>
+          <SectionTitle>Model Physics</SectionTitle>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, fontSize: 11,
+            color: 'var(--muted)' }}>
+            {[
+              ['Governing PDE', "Richards' Equation (1D unsaturated)"],
+              ['Hydraulic model', 'Van Genuchten–Mualem'],
+              ['Stability model', 'Infinite slope (Mohr–Coulomb)'],
+              ['Network', '7 × 64 tanh, 29,377 params'],
+              ['Training', 'Adam (10k) + L-BFGS (5k)'],
+              ['Loss terms', 'Data · PDE · IC · BC · Failure'],
             ].map(([k, v]) => (
-              <div key={k} className="flex justify-between border-b border-slate-100 pb-0.5">
-                <span className="text-slate-500">{k}</span>
-                <span className="font-semibold text-slate-900">{v}</span>
+              <div key={k} style={{ padding: '8px 12px', background: 'rgba(255,255,255,.02)',
+                borderRadius: 6, border: '1px solid var(--border)' }}>
+                <div style={{ fontSize: 10, color: 'var(--muted)', marginBottom: 3 }}>{k}</div>
+                <div style={{ fontSize: 11, color: 'var(--text)', fontFamily:'var(--font-mono)' }}>{v}</div>
               </div>
             ))}
           </div>
-        </div>
+        </Card>
+        <Card>
+          <SectionTitle>Active Parameters</SectionTitle>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, fontFamily: 'var(--font-mono)',
+            fontSize: 11 }}>
+            {[
+              ['β',  `${geo.beta}°`,               'slope angle'],
+              ["c'", `${geo.c_prime} kPa`,         'effective cohesion'],
+              ["φ'", `${geo.phi_prime}°`,           'friction angle'],
+              ['γ',  `${geo.gamma} kN/m³`,         'unit weight'],
+              ['Ks', geo.Ks.toExponential(2)+' m/s','hydraulic cond.'],
+              ['θs', geo.theta_s,                  'sat. water content'],
+              ['α',  `${geo.alpha} 1/m`,           'VG alpha'],
+              ['n',  geo.n,                         'VG n'],
+            ].map(([k, v, hint]) => (
+              <div key={k} style={{ display: 'flex', justifyContent: 'space-between',
+                alignItems: 'center', padding: '4px 0',
+                borderBottom: '1px solid var(--border)' }}>
+                <span style={{ color: 'var(--muted)', minWidth: 28 }}>{k}</span>
+                <span style={{ color: 'var(--text)', fontWeight: 600 }}>{v}</span>
+                <span style={{ color: 'var(--muted)', fontSize: 10, opacity: .6 }}>{hint}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
       </div>
+    </div>
+  );
+}
+
+function ErrorCard({ msg }) {
+  return (
+    <div style={{ padding: 20, color: 'var(--danger)', background: 'var(--surface)',
+      border: '1px solid var(--border)', borderRadius: 8, fontFamily: 'var(--font-mono)',
+      fontSize: 12 }}>
+      Error: {msg}
     </div>
   );
 }

@@ -1,151 +1,215 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api';
 import { useApp } from '../context';
-import { PageHeader, Spinner, Card } from '../components/ui';
-import Chart from '../components/Chart';
+import { PageHeader, Spinner, Card, SectionTitle, SliderField } from '../components/ui';
+import Chart, { DANGER } from '../components/Chart';
 
 export default function Animation() {
   const { geo, norm, defaults } = useApp();
   const times = defaults.available_times;
-  const [frame, setFrame] = useState(0);
-  const [playing, setPlaying] = useState(false);
-  const [speed, setSpeed] = useState(500);
-  const [mode, setMode] = useState('psi');
-  const [cache, setCache] = useState({});
-  const timer = useRef(null);
+  const zMax  = norm.z_max; // fixed: was incorrectly reading geo.z_max
 
-  // Pre-fetch all frames
+  const [frame,   setFrame]   = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [speed,   setSpeed]   = useState(600);
+  const [mode,    setMode]    = useState('psi'); // 'psi' | 'fs'
+  const [cache,   setCache]   = useState({});
+  const [loadedCount, setLoadedCount] = useState(0);
+  const timerRef = useRef(null);
+
+  // Sequential pre-fetch (avoids parallel flood)
   useEffect(() => {
+    setCache({});
+    setLoadedCount(0);
+    let cancelled = false;
+    const depths = Array.from({ length: 60 }, (_, i) => 0.5 + (i / 59) * (zMax - 0.5));
+
     (async () => {
-      const c = {};
-      const depths = Array.from({ length: 50 }, (_, i) => 0.5 + (i / 49) * (geo.z_max || norm.z_max));
       for (const t of times) {
+        if (cancelled) break;
         const [predRes, fsRes] = await Promise.all([
           api.predict({ z: depths, t: Array(depths.length).fill(t) }),
           api.factorOfSafety({ z: depths, t: Array(depths.length).fill(t), geo }),
         ]);
-        c[t] = { depths, psi: predRes.psi, fs: fsRes.fs };
+        if (cancelled) break;
+        setCache(prev => ({ ...prev, [t]: { depths, psi: predRes.psi, fs: fsRes.fs } }));
+        setLoadedCount(prev => prev + 1);
       }
-      setCache(c);
     })();
-  }, [geo, norm, times]);
+
+    return () => { cancelled = true; };
+  }, [geo, norm]); // re-fetch when geo changes
+
+  const pause = useCallback(() => {
+    setPlaying(false);
+    clearInterval(timerRef.current);
+  }, []);
 
   const play = useCallback(() => {
     setPlaying(true);
-    timer.current = setInterval(() => {
+    timerRef.current = setInterval(() => {
       setFrame(f => {
-        if (f >= times.length - 1) { setPlaying(false); clearInterval(timer.current); return 0; }
+        if (f >= times.length - 1) {
+          clearInterval(timerRef.current);
+          setPlaying(false);
+          return 0;
+        }
         return f + 1;
       });
     }, speed);
-  }, [speed, times]);
+  }, [speed, times.length]);
 
-  const pause = () => { setPlaying(false); clearInterval(timer.current); };
+  useEffect(() => () => clearInterval(timerRef.current), []);
 
-  useEffect(() => () => clearInterval(timer.current), []);
-
+  const ready = loadedCount >= times.length;
   const t = times[frame];
   const d = cache[t];
-  const zMax = geo.z_max || norm.z_max;
+
+  const psiMin = d ? Math.min(...d.psi) * 1.05 : -500;
+  const psiMax = d ? Math.max(...d.psi) * 0.5  : -40;
+  const fsMax  = d ? Math.min(8, Math.max(...d.fs) * 1.1) : 6;
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
-      <PageHeader title="Time-Lapse Animation" subtitle="Animated evolution of pressure head and factor of safety over simulation time" icon="🎬" />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 1000 }}>
+      <PageHeader
+        title="Time-Lapse Animation"
+        subtitle="Animated evolution of ψ and FS through the simulation period"
+        badge="Animation"
+      />
 
-      {Object.keys(cache).length < times.length ? (
-        <Card className="text-center py-12">
-          <Spinner />
-          <p className="text-xs text-slate-500 mt-2">Loading frames ({Object.keys(cache).length}/{times.length})…</p>
+      {/* Loading progress */}
+      {!ready && (
+        <Card>
+          <div style={{ marginBottom: 8, fontSize: 11, color: 'var(--muted)' }}>
+            Pre-fetching frames — {loadedCount} / {times.length}
+          </div>
+          <div style={{ height: 4, background: 'var(--border)', borderRadius: 2 }}>
+            <div style={{
+              height: '100%', borderRadius: 2, background: 'var(--accent)',
+              width: `${(loadedCount / times.length) * 100}%`,
+              transition: 'width .3s',
+            }} />
+          </div>
         </Card>
-      ) : (
-        <>
-          {/* Controls */}
-          <Card>
-            <div className="flex items-center gap-4 flex-wrap">
-              <button onClick={playing ? pause : play}
-                className="px-5 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 transition">
-                {playing ? '⏸ Pause' : '▶ Play'}
-              </button>
-              <button onClick={() => setFrame(0)} className="px-3 py-2 text-xs rounded bg-slate-100 hover:bg-slate-200 text-slate-600">
-                ⏮ Reset
-              </button>
-              <div className="flex gap-2">
-                {['psi', 'fs'].map(m => (
-                  <button key={m} onClick={() => setMode(m)}
-                    className={`px-3 py-1.5 text-xs rounded-lg font-medium ${mode === m ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-600'}`}>
-                    {m === 'psi' ? 'ψ Profile' : 'FS Profile'}
-                  </button>
-                ))}
-              </div>
-              <div className="ml-auto flex items-center gap-2">
-                <span className="text-xs text-slate-500">Speed</span>
-                <input type="range" min={100} max={1500} step={100} value={speed}
-                  onChange={e => setSpeed(+e.target.value)} className="w-24" />
-                <span className="text-xs text-slate-500 w-12">{speed}ms</span>
-              </div>
-            </div>
+      )}
 
-            {/* Timeline scrubber */}
-            <div className="mt-4">
-              <input type="range" min={0} max={times.length - 1} value={frame}
-                onChange={e => { setFrame(+e.target.value); pause(); }}
-                className="w-full accent-blue-600" />
-              <div className="flex justify-between text-[10px] text-slate-400 mt-1 px-1">
-                {times.filter((_, i) => i % Math.ceil(times.length / 10) === 0 || i === times.length - 1).map(t => (
-                  <span key={t}>{t}hr</span>
-                ))}
-              </div>
-            </div>
-          </Card>
+      {/* Controls */}
+      <Card>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap', marginBottom: 14 }}>
+          <button
+            onClick={playing ? pause : play}
+            disabled={loadedCount === 0}
+            style={{ padding: '6px 18px', fontSize: 12, fontWeight: 600, borderRadius: 6,
+              background: playing ? 'var(--border2)' : 'var(--accent)', color: '#fff',
+              border: 'none', cursor: loadedCount === 0 ? 'not-allowed' : 'pointer',
+              opacity: loadedCount === 0 ? 0.4 : 1 }}>
+            {playing ? '⏸ Pause' : '▶ Play'}
+          </button>
+          <button onClick={() => { pause(); setFrame(0); }}
+            style={{ padding: '6px 14px', fontSize: 12, borderRadius: 6,
+              background: 'var(--border)', color: 'var(--muted)', border: 'none', cursor: 'pointer' }}>
+            ⏮ Reset
+          </button>
 
-          {/* Current frame info */}
-          <div className="flex items-center gap-3">
-            <div className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-bold">Hour {t}</div>
-            <div className="text-xs text-slate-500">Frame {frame + 1} / {times.length}</div>
-            {d && (
-              <>
-                <div className="text-xs text-slate-500">ψ range: [{Math.min(...d.psi).toFixed(1)}, {Math.max(...d.psi).toFixed(1)}] m</div>
-                <div className="text-xs text-slate-500">FS min: {Math.min(...d.fs).toFixed(3)}</div>
-              </>
-            )}
+          {/* Mode toggle */}
+          <div style={{ display: 'flex', gap: 4, marginLeft: 8 }}>
+            {[['psi', 'ψ Profile'], ['fs', 'FS Profile']].map(([m, lbl]) => (
+              <button key={m} onClick={() => setMode(m)}
+                style={{ padding: '5px 12px', fontSize: 11, fontWeight: 600, borderRadius: 5,
+                  background: mode === m ? 'rgba(47,129,247,.2)' : 'transparent',
+                  color: mode === m ? 'var(--accent)' : 'var(--muted)',
+                  border: `1px solid ${mode === m ? 'var(--accent)' : 'var(--border)'}`,
+                  cursor: 'pointer' }}>
+                {lbl}
+              </button>
+            ))}
           </div>
 
-          {/* Chart */}
-          {d && (
-            <Card>
-              {mode === 'psi' ? (
-                <Chart
-                  data={[{
-                    x: d.psi, y: d.depths, type: 'scatter', mode: 'lines',
-                    line: { color: '#2563eb', width: 3 }, fill: 'tozerox', fillcolor: 'rgba(37,99,235,0.08)',
-                    name: `ψ at t=${t}hr`,
-                  }]}
-                  layout={{
-                    xaxis: { title: 'ψ (m)', range: [norm.psi_min * 1.05, norm.psi_max * 0.5] },
-                    yaxis: { title: 'Depth (m)', autorange: 'reversed' },
-                    height: 500, title: { text: `Pressure Head Profile — Hour ${t}`, font: { size: 14 } },
-                  }}
-                />
-              ) : (
-                <Chart
-                  data={[{
-                    x: d.fs, y: d.depths, type: 'scatter', mode: 'lines',
-                    line: { color: '#059669', width: 3 }, name: `FS at t=${t}hr`,
-                  }, {
-                    x: [1, 1], y: [0, zMax], type: 'scatter', mode: 'lines',
-                    line: { color: '#dc2626', width: 2, dash: 'dash' }, name: 'FS = 1',
-                  }]}
-                  layout={{
-                    xaxis: { title: 'Factor of Safety', range: [0, Math.max(5, Math.max(...d.fs) * 1.1)] },
-                    yaxis: { title: 'Depth (m)', autorange: 'reversed' },
-                    height: 500, title: { text: `Factor of Safety — Hour ${t}`, font: { size: 14 } },
-                  }}
-                />
-              )}
-            </Card>
-          )}
-        </>
-      )}
+          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 10, color: 'var(--muted)' }}>Frame delay</span>
+            <input type="range" min={150} max={1500} step={50} value={speed}
+              onChange={e => setSpeed(+e.target.value)}
+              style={{ width: 80, accentColor: 'var(--accent)' }} />
+            <span style={{ fontSize: 10, color: 'var(--muted)', fontFamily: 'var(--font-mono)',
+              width: 42 }}>{speed} ms</span>
+          </div>
+        </div>
+
+        {/* Scrubber */}
+        <div>
+          <input type="range" min={0} max={times.length - 1} value={frame}
+            onChange={e => { pause(); setFrame(+e.target.value); }}
+            style={{ width: '100%', accentColor: 'var(--accent)' }} />
+          <div style={{ display: 'flex', justifyContent: 'space-between',
+            fontSize: 9, color: 'var(--muted)', fontFamily: 'var(--font-mono)', marginTop: 3, padding: '0 2px' }}>
+            {times.filter((_, i) => i % Math.ceil(times.length / 8) === 0).map(t => (
+              <span key={t}>Day {t}</span>
+            ))}
+          </div>
+        </div>
+      </Card>
+
+      {/* Frame status */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <div style={{ padding: '4px 14px', background: 'rgba(47,129,247,.15)',
+          border: '1px solid rgba(47,129,247,.3)', borderRadius: 4,
+          fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--accent)' }}>
+          Day {t}
+        </div>
+        <span style={{ fontSize: 11, color: 'var(--muted)' }}>
+          Frame {frame + 1} / {times.length}
+        </span>
+        {d && <>
+          <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--font-mono)' }}>
+            ψ ∈ [{Math.min(...d.psi).toFixed(1)}, {Math.max(...d.psi).toFixed(1)}] m
+          </span>
+          <span style={{ fontSize: 11, color: 'var(--muted)', fontFamily: 'var(--font-mono)' }}>
+            FS_min = {Math.min(...d.fs).toFixed(3)}
+          </span>
+        </>}
+      </div>
+
+      {/* Chart */}
+      <Card>
+        {!d
+          ? <Spinner text={ready ? 'Rendering…' : `Loading ${loadedCount}/${times.length} frames…`} />
+          : mode === 'psi'
+            ? (
+              <Chart
+                data={[{
+                  x: d.psi, y: d.depths, type: 'scatter', mode: 'lines',
+                  name: `ψ  Day ${t}`,
+                  line: { color: '#2f81f7', width: 2.5 },
+                  fill: 'tozerox', fillcolor: 'rgba(47,129,247,.07)',
+                }]}
+                layout={{
+                  xaxis: { title: { text: 'ψ (m)', font: { size: 11 } }, range: [psiMin, psiMax] },
+                  yaxis: { title: { text: 'Depth (m)', font: { size: 11 } }, autorange: 'reversed' },
+                  title: { text: `Pressure Head — Day ${t}`,
+                    font: { size: 12, color: '#7d8590' }, x: 0.5 },
+                }}
+                height={500}
+              />
+            )
+            : (
+              <Chart
+                data={[
+                  { x: d.fs, y: d.depths, type: 'scatter', mode: 'lines',
+                    name: `FS  Day ${t}`, line: { color: '#3fb950', width: 2.5 } },
+                  { x: [1, 1], y: [0, zMax], type: 'scatter', mode: 'lines',
+                    name: 'FS = 1', line: { color: DANGER, width: 1.5, dash: 'dash' } },
+                ]}
+                layout={{
+                  xaxis: { title: { text: 'Factor of Safety', font: { size: 11 } }, range: [0, fsMax] },
+                  yaxis: { title: { text: 'Depth (m)', font: { size: 11 } }, autorange: 'reversed' },
+                  title: { text: `Factor of Safety — Day ${t}`,
+                    font: { size: 12, color: '#7d8590' }, x: 0.5 },
+                }}
+                height={500}
+              />
+            )
+        }
+      </Card>
     </div>
   );
 }

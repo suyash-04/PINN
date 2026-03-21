@@ -1,126 +1,153 @@
+// RainfallSim.jsx
 import { useState } from 'react';
-import { useApp } from '../context';
-import { PageHeader, Card, SliderField, MetricCard } from '../components/ui';
-import Chart, { COLORS } from '../components/Chart';
 import { api } from '../api';
+import { useApp } from '../context';
+import { PageHeader, Card, SliderField, MetricCard, SectionTitle, Button } from '../components/ui';
+import Chart, { COLORS } from '../components/Chart';
 
 export default function RainfallSim() {
   const { geo, norm } = useApp();
   const [intensity, setIntensity] = useState(1e-6);
-  const [duration, setDuration] = useState(48);
-  const [results, setResults] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [duration,  setDuration]  = useState(48);
+  const [results,   setResults]   = useState(null);
+  const [loading,   setLoading]   = useState(false);
+
+  const INTENSITIES = [
+    [1e-7, '1×10⁻⁷  light drizzle'],
+    [5e-7, '5×10⁻⁷  moderate rain'],
+    [1e-6, '1×10⁻⁶  steady rain'],
+    [5e-6, '5×10⁻⁶  heavy rain'],
+    [1e-5, '1×10⁻⁵  extreme event'],
+  ];
 
   const simulate = async () => {
     setLoading(true);
-    const times = [0, 20, 40, 60, 80, 100, 123];
+    const tMax  = norm.t_max;
+    const times = [0, 20, 40, 60, 80, 100, tMax];
     const depths = Array.from({ length: 40 }, (_, i) => 0.5 + (i / 39) * 39.5);
 
-    const profiles = await Promise.all(
-      times.map(async t => {
-        const predRes = await api.predict({ z: depths, t: Array(depths.length).fill(t) });
-        const psiArr = predRes.psi;
-        // Apply a simple rainfall infiltration perturbation (conceptual)
-        const infiltration = Math.min(intensity * duration * 3600, geo.Ks * duration * 3600);
-        const psiWet = psiArr.map((psi, i) => {
-          const depthFactor = Math.exp(-depths[i] / 5);
-          const timeFactor = t < duration ? t / duration : Math.max(0, 1 - (t - duration) / (123 - duration));
-          return psi + infiltration * 1000 * depthFactor * timeFactor;
-        });
-        return { time: t, depths, psi_dry: psiArr, psi_wet: psiWet };
-      })
-    );
+    const profiles = await Promise.all(times.map(async t => {
+      const predRes = await api.predict({ z: depths, t: Array(depths.length).fill(t) });
+      const psiArr  = predRes.psi;
+      const infiltration = Math.min(intensity * duration * 3600, geo.Ks * duration * 3600);
+      const psiWet = psiArr.map((psi, i) => {
+        const depthFactor = Math.exp(-depths[i] / 5);
+        const timeFactor  = t < duration
+          ? t / duration
+          : Math.max(0, 1 - (t - duration) / (tMax - duration));
+        return psi + infiltration * 1000 * depthFactor * timeFactor;
+      });
+      return { time: t, depths, psi_dry: psiArr, psi_wet: psiWet };
+    }));
 
     setResults({ profiles, intensity, duration });
     setLoading(false);
   };
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
-      <PageHeader title="Rainfall Scenario Simulation" subtitle="Explore how different rainfall intensities affect pore-water pressure and slope stability" icon="🌧️" />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 1200 }}>
+      <PageHeader
+        title="Rainfall Scenario Simulation"
+        subtitle="Conceptual overlay — how different rainfall intensities perturb the baseline ψ field"
+        badge="Conceptual"
+      />
 
       <Card>
-        <div className="grid grid-cols-3 gap-4 items-end">
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 20, alignItems: 'end' }}>
           <div>
-            <label className="text-xs font-semibold text-slate-500 mb-1 block">Rainfall Intensity (m/s)</label>
-            <select value={intensity} onChange={e => setIntensity(+e.target.value)}
-              className="w-full p-2 rounded-lg bg-slate-50 border border-slate-200 text-sm">
-              <option value={1e-7}>1×10⁻⁷ (light drizzle)</option>
-              <option value={5e-7}>5×10⁻⁷ (moderate)</option>
-              <option value={1e-6}>1×10⁻⁶ (steady rain)</option>
-              <option value={5e-6}>5×10⁻⁶ (heavy rain)</option>
-              <option value={1e-5}>1×10⁻⁵ (extreme)</option>
-            </select>
+            <SectionTitle>Rainfall intensity</SectionTitle>
+            {INTENSITIES.map(([v, label]) => (
+              <label key={v} style={{ display: 'flex', alignItems: 'center', gap: 8,
+                fontSize: 11, color: intensity === v ? 'var(--accent)' : 'var(--muted)',
+                cursor: 'pointer', marginBottom: 5 }}>
+                <input type="radio" name="intensity" value={v}
+                  checked={intensity === v} onChange={() => setIntensity(v)}
+                  style={{ accentColor: 'var(--accent)' }} />
+                <span style={{ fontFamily: 'var(--font-mono)' }}>{label}</span>
+              </label>
+            ))}
           </div>
-          <SliderField label={`Duration: ${duration} hours`} value={duration} min={1} max={120} step={1} onChange={setDuration} />
-          <button onClick={simulate} disabled={loading}
-            className="px-5 py-2.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 transition h-10">
-            {loading ? 'Simulating…' : '🌧️ Simulate'}
-          </button>
+          <SliderField label="Duration" value={duration} onChange={setDuration}
+            min={1} max={120} step={1} fmt={v => `${v} hours`} />
+          <Button onClick={simulate} disabled={loading} variant="primary">
+            {loading ? 'Simulating…' : 'Simulate →'}
+          </Button>
         </div>
       </Card>
 
-      {!results ? (
-        <Card className="text-center py-12 text-slate-400">
-          <div className="text-4xl mb-3">🌧️</div>
-          <p className="text-sm">Configure rainfall parameters and click <strong>Simulate</strong></p>
-        </Card>
-      ) : (
-        <>
-          <div className="grid grid-cols-3 gap-3">
-            <MetricCard label="Intensity" value={`${results.intensity.toExponential(1)} m/s`} color="blue" />
-            <MetricCard label="Duration" value={`${results.duration} hrs`} color="amber" />
-            <MetricCard label="Cumulative" value={`${(results.intensity * results.duration * 3600 * 1000).toFixed(1)} mm`} color="green" />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            {/* Dry vs Wet comparison at selected times */}
-            <Card>
-              <h3 className="text-sm font-semibold text-slate-700 mb-2">ψ Profiles: Dry vs Wet</h3>
-              <Chart
-                data={results.profiles.filter((_, i) => i % 2 === 0).flatMap((p, i) => [
-                  { x: p.psi_dry, y: p.depths, type: 'scatter', mode: 'lines',
-                    name: `Dry t=${p.time}d`, line: { color: COLORS[i], width: 1.5, dash: 'dot' },
-                    legendgroup: `t${p.time}` },
-                  { x: p.psi_wet, y: p.depths, type: 'scatter', mode: 'lines',
-                    name: `Wet t=${p.time}d`, line: { color: COLORS[i], width: 2.5 },
-                    legendgroup: `t${p.time}` },
-                ])}
-                layout={{
-                  xaxis: { title: 'ψ (m)' }, yaxis: { title: 'Depth (m)', autorange: 'reversed' },
-                  height: 420, legend: { font: { size: 9 } },
-                }}
-              />
-            </Card>
-
-            {/* ψ change heatmap */}
-            <Card>
-              <h3 className="text-sm font-semibold text-slate-700 mb-2">ψ Change (Wet − Dry)</h3>
-              <Chart
-                data={[{
-                  z: results.profiles.map(p => p.psi_wet.map((w, i) => w - p.psi_dry[i])),
-                  x: results.profiles[0].depths,
-                  y: results.profiles.map(p => `Hour ${p.time}`),
-                  type: 'heatmap', colorscale: 'RdBu',
-                  colorbar: { title: { text: 'Δψ (m)', side: 'right' }, thickness: 15 },
-                }]}
-                layout={{
-                  xaxis: { title: 'Depth (m)' }, height: 420,
-                }}
-              />
-            </Card>
-          </div>
-
-          <Card>
-            <h3 className="text-sm font-semibold text-slate-700 mb-2">📘 Note</h3>
-            <p className="text-xs text-slate-600">
-              This is a conceptual scenario overlay. The base ψ field comes from the trained PINN.
-              A simplified 1D infiltration perturbation is applied (exponential decay with depth, linear ramp with time).
-              For rigorous coupled rainfall-infiltration analysis, the PINN should be retrained with time-varying flux boundary conditions.
-            </p>
+      {!results
+        ? (
+          <Card style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--muted)' }}>
+            <div style={{ fontSize: 32, marginBottom: 12 }}>🌧</div>
+            <div style={{ fontSize: 12 }}>Configure parameters and click <strong>Simulate</strong></div>
           </Card>
-        </>
-      )}
+        )
+        : (
+          <>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 12 }}>
+              <MetricCard label="Intensity"
+                value={results.intensity.toExponential(1)+' m/s'} color="blue" />
+              <MetricCard label="Duration"
+                value={`${results.duration} hours`} color="amber" />
+              <MetricCard label="Cumulative"
+                value={`${(results.intensity * results.duration * 3600 * 1000).toFixed(1)} mm`}
+                color="green" />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <Card>
+                <SectionTitle>ψ profiles — dry vs wet (even timesteps)</SectionTitle>
+                <Chart
+                  data={results.profiles.filter((_, i) => i % 2 === 0).flatMap((p, i) => [
+                    { x: p.psi_dry, y: p.depths, type: 'scatter', mode: 'lines',
+                      name: `Dry t=${p.time}`, legendgroup: `t${p.time}`,
+                      line: { color: COLORS[i % COLORS.length], width: 1.2, dash: 'dot' } },
+                    { x: p.psi_wet, y: p.depths, type: 'scatter', mode: 'lines',
+                      name: `Wet t=${p.time}`, legendgroup: `t${p.time}`,
+                      line: { color: COLORS[i % COLORS.length], width: 2 } },
+                  ])}
+                  layout={{
+                    xaxis: { title: { text: 'ψ (m)', font: { size: 11 } } },
+                    yaxis: { title: { text: 'Depth (m)', font: { size: 11 } }, autorange: 'reversed' },
+                    legend: { font: { size: 9 } },
+                  }}
+                  height={400}
+                />
+              </Card>
+
+              <Card>
+                <SectionTitle>Δψ heatmap — wet − dry (m)</SectionTitle>
+                <Chart
+                  data={[{
+                    z: results.profiles.map(p => p.psi_wet.map((w, i) => w - p.psi_dry[i])),
+                    x: results.profiles[0].depths,
+                    y: results.profiles.map(p => `Day ${p.time}`),
+                    type: 'heatmap', colorscale: 'RdBu',
+                    colorbar: { title: { text: 'Δψ (m)', side: 'right' }, thickness: 14,
+                      tickfont: { size: 10, color: '#7d8590' } },
+                  }]}
+                  layout={{
+                    xaxis: { title: { text: 'Depth (m)', font: { size: 11 } } },
+                    margin: { l: 60, r: 80, t: 20, b: 50 },
+                  }}
+                  height={400}
+                />
+              </Card>
+            </div>
+
+            <Card>
+              <SectionTitle>Note on methodology</SectionTitle>
+              <div style={{ fontSize: 11, color: 'var(--muted)', lineHeight: 1.7 }}>
+                This is a conceptual overlay. The base ψ field is from the trained PINN.
+                A simplified depth-attenuated, time-ramped infiltration perturbation is applied
+                (exp decay with depth, linear with time) — not a coupled re-simulation.
+                For rigorous rainfall-coupled analysis, retrain with time-varying flux boundary
+                conditions.
+              </div>
+            </Card>
+          </>
+        )
+      }
     </div>
   );
 }

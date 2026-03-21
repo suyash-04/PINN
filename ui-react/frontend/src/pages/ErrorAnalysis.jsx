@@ -1,153 +1,149 @@
 import { useState, useEffect } from 'react';
 import { api } from '../api';
 import { useApp } from '../context';
-import { PageHeader, Spinner, Card, MetricCard, Tabs } from '../components/ui';
+import { PageHeader, Spinner, Card, MetricCard, TimeToggle, SectionTitle, DataTable } from '../components/ui';
 import Chart, { COLORS } from '../components/Chart';
 
 export default function ErrorAnalysis() {
-  const { geo, norm, defaults } = useApp();
+  const { defaults } = useApp();
+  const defaultTimes = defaults.available_times.slice(0, 5);
+  const [selectedTimes, setSelectedTimes] = useState(defaultTimes);
   const [data, setData] = useState(null);
-  const [selectedTimes, setSelectedTimes] = useState([0, 60, 90, 96, 123]);
 
   useEffect(() => {
+    if (!selectedTimes.length) { setData(null); return; }
     api.hydrusComparison({ times: selectedTimes }).then(d => {
-      // Compute overall metrics
       const allHydrus = d.comparisons.flatMap(c => c.psi_hydrus);
-      const allPinn = d.comparisons.flatMap(c => c.psi_pinn);
-      const allErr = allPinn.map((p, i) => p - allHydrus[i]);
-      const meanObs = allHydrus.reduce((a, b) => a + b, 0) / allHydrus.length;
-      const ssRes = allErr.reduce((a, e) => a + e * e, 0);
-      const ssTot = allHydrus.reduce((a, h) => a + (h - meanObs) ** 2, 0);
-      const r2 = 1 - ssRes / Math.max(ssTot, 1e-10);
+      const allPinn   = d.comparisons.flatMap(c => c.psi_pinn);
+      const allErr    = allPinn.map((p, i) => p - allHydrus[i]);
+      const mean      = allHydrus.reduce((a, b) => a + b, 0) / allHydrus.length;
+      const ssRes     = allErr.reduce((a, e) => a + e * e, 0);
+      const ssTot     = allHydrus.reduce((a, h) => a + (h - mean) ** 2, 0);
+      const r2        = 1 - ssRes / Math.max(ssTot, 1e-10);
       setData({ ...d, overall: { r2 } });
     });
-  }, [selectedTimes, geo, norm]);
+  }, [selectedTimes]);
 
-  const toggle = t => setSelectedTimes(p => p.includes(t) ? p.filter(x => x !== t) : [...p, t]);
-
-  if (!data) return <Spinner />;
+  if (!data) return <Spinner text="Computing errors…" />;
 
   const allErrors = data.comparisons.flatMap(c => c.abs_error);
-  const maxErr = Math.max(...allErrors);
+  const maxErr  = Math.max(...allErrors);
   const meanErr = allErrors.reduce((a, b) => a + b, 0) / allErrors.length;
-  const pct95 = [...allErrors].sort((a, b) => a - b)[Math.floor(allErrors.length * 0.95)];
+  const sorted  = [...allErrors].sort((a, b) => a - b);
+  const p95     = sorted[Math.floor(sorted.length * 0.95)];
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
-      <PageHeader title="Error Analysis" subtitle="Detailed error metrics and spatial/temporal error distribution" icon="🔍" />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 1400 }}>
+      <PageHeader
+        title="Error Analysis"
+        subtitle="Spatial and statistical breakdown of PINN prediction errors vs HYDRUS-1D"
+        badge="Diagnostics"
+      />
 
-      <div className="grid grid-cols-4 gap-3">
-        <MetricCard label="R²" value={data.overall.r2.toFixed(4)} color="blue" />
-        <MetricCard label="Max Error" value={`${maxErr.toFixed(2)} m`} color="red" />
-        <MetricCard label="Mean Error" value={`${meanErr.toFixed(2)} m`} color="amber" />
-        <MetricCard label="95th Pctile" value={`${pct95.toFixed(2)} m`} color="purple" />
+      <Card>
+        <SectionTitle>Timestep selection</SectionTitle>
+        <TimeToggle times={defaults.available_times} selected={selectedTimes}
+          onChange={setSelectedTimes} label="Day" />
+      </Card>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 12 }}>
+        <MetricCard label="Overall R²"    value={data.overall.r2.toFixed(5)} color="blue" />
+        <MetricCard label="Max error"     value={`${maxErr.toFixed(3)} m`}   color="red" />
+        <MetricCard label="Mean error"    value={`${meanErr.toFixed(3)} m`}  color="amber" />
+        <MetricCard label="95th pct error" value={`${p95.toFixed(3)} m`}    color="purple" />
       </div>
 
       <Card>
-        <p className="text-xs font-semibold text-slate-500 mb-2">TIMESTEPS</p>
-        <div className="flex flex-wrap gap-2">
-          {defaults.available_times.map(t => (
-            <button key={t} onClick={() => toggle(t)}
-              className={`px-3 py-1 text-xs rounded-full font-medium transition
-                ${selectedTimes.includes(t) ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600'}`}>
-              {t}d
-            </button>
-          ))}
-        </div>
-      </Card>
-
-      {/* Error profiles per time */}
-      <Card>
-        <h3 className="text-sm font-semibold text-slate-700 mb-2">Error Profiles by Depth</h3>
+        <SectionTitle>Absolute error profiles — ψ residual vs depth</SectionTitle>
         <Chart
           data={data.comparisons.map((c, i) => ({
             x: c.abs_error, y: c.z, type: 'scatter', mode: 'lines+markers',
-            name: `t=${c.time}d`, line: { color: COLORS[i % COLORS.length] }, marker: { size: 3 },
+            name: `Day ${c.time}`,
+            line: { color: COLORS[i % COLORS.length], width: 1.8 },
+            marker: { size: 3 },
           }))}
           layout={{
-            xaxis: { title: '|Error| (m)' }, yaxis: { title: 'Depth (m)', autorange: 'reversed' },
-            height: 450,
+            xaxis: { title: { text: '|ψ_PINN − ψ_HYDRUS| (m)', font: { size: 11 } } },
+            yaxis: { title: { text: 'Depth (m)', font: { size: 11 } }, autorange: 'reversed' },
+            legend: { orientation: 'h', y: 1.1, xanchor: 'center', x: 0.5 },
           }}
+          height={420}
         />
       </Card>
 
-      <div className="grid grid-cols-2 gap-4">
-        {/* Error histogram */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
         <Card>
-          <h3 className="text-sm font-semibold text-slate-700 mb-2">Error Distribution</h3>
+          <SectionTitle>Error distribution</SectionTitle>
           <Chart
             data={[{
-              x: allErrors, type: 'histogram', nbinsx: 40,
-              marker: { color: '#6366f1' }, name: '|Error|',
+              x: allErrors, type: 'histogram', nbinsx: 45,
+              marker: { color: 'rgba(47,129,247,.5)' }, name: '|error|',
             }]}
             layout={{
-              xaxis: { title: '|Error| (m)' }, yaxis: { title: 'Count' }, height: 350, bargap: 0.05,
+              xaxis: { title: { text: '|Error| (m)', font: { size: 11 } } },
+              yaxis: { title: { text: 'Count', font: { size: 11 } } },
+              bargap: 0.04,
             }}
+            height={320}
           />
         </Card>
 
-        {/* Per-time bar chart */}
         <Card>
-          <h3 className="text-sm font-semibold text-slate-700 mb-2">RMSE by Timestep</h3>
+          <SectionTitle>RMSE by timestep</SectionTitle>
           <Chart
             data={[{
-              x: data.comparisons.map(c => `t=${c.time}d`),
+              x: data.comparisons.map(c => `Day ${c.time}`),
               y: data.comparisons.map(c => c.rmse),
-              type: 'bar', marker: { color: data.comparisons.map((_, i) => COLORS[i % COLORS.length]) },
+              type: 'bar',
+              marker: { color: data.comparisons.map((_, i) => COLORS[i % COLORS.length]) },
+              name: 'RMSE',
             }]}
             layout={{
-              xaxis: { title: 'Timestep' }, yaxis: { title: 'RMSE (m)' }, height: 350,
+              xaxis: { title: { text: 'Timestep', font: { size: 11 } } },
+              yaxis: { title: { text: 'RMSE (m)', font: { size: 11 } } },
             }}
+            height={320}
           />
         </Card>
       </div>
 
-      {/* Relative error heatmap */}
       <Card>
-        <h3 className="text-sm font-semibold text-slate-700 mb-2">Relative Error (%) by Time & Depth</h3>
+        <SectionTitle>Relative error heatmap — |ε| / |ψ_HYDRUS| (%)</SectionTitle>
         <Chart
           data={[{
-            z: data.comparisons.map(c => c.abs_error.map((e, i) => Math.abs(c.psi_hydrus[i]) > 1 ? (e / Math.abs(c.psi_hydrus[i])) * 100 : 0)),
-            x: data.comparisons[0]?.z || [],
-            y: data.comparisons.map(c => `Hour ${c.time}`),
+            z: data.comparisons.map(c =>
+              c.abs_error.map((e, i) =>
+                Math.abs(c.psi_hydrus[i]) > 1 ? (e / Math.abs(c.psi_hydrus[i])) * 100 : 0
+              )
+            ),
+            x: data.comparisons[0]?.z ?? [],
+            y: data.comparisons.map(c => `Day ${c.time}`),
             type: 'heatmap', colorscale: 'YlOrRd',
-            colorbar: { title: { text: '%', side: 'right' }, thickness: 15 },
+            colorbar: { title: { text: '%', side: 'right' }, thickness: 14,
+              tickfont: { size: 10, color: '#7d8590' } },
           }]}
           layout={{
-            xaxis: { title: 'Depth (m)' }, yaxis: { title: '' }, height: 350,
+            xaxis: { title: { text: 'Depth (m)', font: { size: 11 } } },
+            margin: { l: 70, r: 80, t: 20, b: 50 },
           }}
+          height={280}
         />
       </Card>
 
-      {/* Detailed stats table */}
       <Card>
-        <h3 className="text-sm font-semibold text-slate-700 mb-3">📋 Detailed Statistics</h3>
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b text-left text-slate-500">
-                <th className="p-2">Time</th><th className="p-2">R²</th><th className="p-2">RMSE</th>
-                <th className="p-2">MAE</th><th className="p-2">Max Err</th><th className="p-2">Quality</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.comparisons.map(c => {
-                const mx = Math.max(...c.abs_error);
-                const q = c.r2 > 0.99 ? '🟢 Excellent' : c.r2 > 0.95 ? '🟡 Good' : '🔴 Needs Work';
-                return (
-                  <tr key={c.time} className="border-b border-slate-50">
-                    <td className="p-2 font-medium">Hour {c.time}</td>
-                    <td className="p-2">{c.r2.toFixed(4)}</td>
-                    <td className="p-2">{c.rmse.toFixed(3)}</td>
-                    <td className="p-2">{c.mae.toFixed(3)}</td>
-                    <td className="p-2">{mx.toFixed(3)}</td>
-                    <td className="p-2">{q}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <SectionTitle>Per-timestep statistics table</SectionTitle>
+        <DataTable
+          columns={[
+            { key: 'time', label: 'Day' },
+            { key: 'r2',   label: 'R²',   render: v => v?.toFixed(5) },
+            { key: 'rmse', label: 'RMSE (m)', render: v => v?.toFixed(4) },
+            { key: 'mae',  label: 'MAE (m)',  render: v => v?.toFixed(4) },
+            { key: 'r2',   label: 'Rating',
+              render: v => v > 0.999 ? '✓ Excellent' : v > 0.99 ? '~ Very good' : v > 0.95 ? '~ Good' : '✗ Review' },
+          ]}
+          rows={data.comparisons}
+          keyFn={r => r.time}
+        />
       </Card>
     </div>
   );

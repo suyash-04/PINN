@@ -1,27 +1,28 @@
 import { useState } from 'react';
 import { useApp } from '../context';
 import { api } from '../api';
-import { PageHeader, Card, Spinner } from '../components/ui';
+import { PageHeader, Card, Spinner, SectionTitle, Button } from '../components/ui';
 
 const FORMATS = [
-  { key: 'csv', label: 'CSV', icon: '📊', desc: 'Comma-separated values for spreadsheets' },
-  { key: 'json', label: 'JSON', icon: '🔧', desc: 'Structured data for programmatic use' },
-  { key: 'numpy', label: 'NumPy', icon: '🐍', desc: 'NumPy arrays for Python analysis' },
+  { key: 'csv',  label: 'CSV',    desc: 'Comma-separated — spreadsheets & R/pandas' },
+  { key: 'json', label: 'JSON',   desc: 'Structured — programmatic consumption' },
 ];
 
 const DATASETS = [
-  { key: 'predictions', label: 'PINN Predictions', desc: 'Full ψ(t,z) prediction grid' },
-  { key: 'factor_of_safety', label: 'Factor of Safety', desc: 'FS grid over all times and depths' },
-  { key: 'comparison', label: 'HYDRUS Comparison', desc: 'PINN vs HYDRUS-1D data with error metrics' },
-  { key: 'soil_properties', label: 'Soil Properties', desc: 'Van Genuchten curves (θ, K, C vs ψ)' },
+  { key: 'predictions',    label: 'PINN Predictions',  desc: 'Full ψ(t, z) grid' },
+  { key: 'factor_of_safety', label: 'Factor of Safety', desc: 'FS(t, z) grid' },
+  { key: 'comparison',    label: 'HYDRUS Comparison',  desc: 'PINN vs HYDRUS + error metrics' },
 ];
 
 export default function Export() {
-  const { geo, norm } = useApp();
-  const [format, setFormat] = useState('csv');
+  // Pull defaults from context — NOT bare variable
+  const { geo, norm, defaults } = useApp();
+  const tMax = defaults.norm.t_max;
+
+  const [format,  setFormat]  = useState('csv');
   const [dataset, setDataset] = useState('predictions');
   const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState(null);
+  const [status,  setStatus]  = useState(null);
 
   const handleExport = async () => {
     setLoading(true);
@@ -29,112 +30,132 @@ export default function Export() {
     try {
       const result = await api.exportData({
         z_min: 0.5, z_max: 40, z_res: 50,
-        t_min: 0, t_max: defaults.norm.t_max, t_res: 50,
+        t_min: 0, t_max: tMax, t_res: 50,
         geo, norm,
       });
-      // Create download from the response
+
       if (result.data) {
-        let content, ext, mimeType;
+        let content, ext, mime;
         if (format === 'json') {
           content = JSON.stringify(result.data, null, 2);
-          ext = 'json';
-          mimeType = 'application/json';
+          ext = 'json'; mime = 'application/json';
         } else {
-          // Convert array of objects to CSV
-          const rows = result.data;
+          const rows    = result.data;
           const headers = Object.keys(rows[0]);
-          const csvLines = [headers.join(','), ...rows.map(r => headers.map(h => r[h]).join(','))];
-          content = csvLines.join('\n');
-          ext = 'csv';
-          mimeType = 'text/csv';
+          const lines   = [headers.join(','), ...rows.map(r => headers.map(h => r[h]).join(','))];
+          content = lines.join('\n');
+          ext = 'csv'; mime = 'text/csv';
         }
-        const blob = new Blob([content], { type: mimeType });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `pinn_export_${new Date().toISOString().slice(0, 10)}.${ext}`;
+        const blob = new Blob([content], { type: mime });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = `pinn_${dataset}_${new Date().toISOString().slice(0,10)}.${ext}`;
         a.click();
         URL.revokeObjectURL(url);
-        setStatus({ type: 'success', msg: `Exported ${result.n_rows} rows!` });
+        setStatus({ ok: true, msg: `Exported ${result.n_rows?.toLocaleString()} rows` });
       } else {
-        setStatus({ type: 'success', msg: `Export ready: ${result.message || 'Success'}` });
+        setStatus({ ok: true, msg: 'Export complete' });
       }
     } catch (e) {
-      setStatus({ type: 'error', msg: `Export failed: ${e.message}` });
+      setStatus({ ok: false, msg: e.message });
     }
     setLoading(false);
   };
 
   return (
-    <div className="space-y-6 max-w-4xl mx-auto">
-      <PageHeader title="Export Data" subtitle="Download PINN predictions and analysis results in various formats" icon="📤" />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 800 }}>
+      <PageHeader
+        title="Export Data"
+        subtitle="Download PINN predictions and analysis results"
+        badge="Export"
+      />
 
-      {/* Format selection */}
+      {/* Format */}
       <Card>
-        <h3 className="text-sm font-semibold text-slate-700 mb-3">Output Format</h3>
-        <div className="grid grid-cols-3 gap-3">
+        <SectionTitle>Output format</SectionTitle>
+        <div style={{ display: 'flex', gap: 10 }}>
           {FORMATS.map(f => (
-            <button key={f.key} onClick={() => setFormat(f.key)}
-              className={`p-4 rounded-xl border-2 text-left transition ${
-                format === f.key ? 'border-blue-500 bg-blue-50' : 'border-slate-100 hover:border-slate-200'
-              }`}>
-              <div className="text-2xl mb-1">{f.icon}</div>
-              <p className="text-sm font-semibold text-slate-800">{f.label}</p>
-              <p className="text-[10px] text-slate-500">{f.desc}</p>
+            <button key={f.key} onClick={() => setFormat(f.key)} style={{
+              flex: 1, padding: '12px 16px', borderRadius: 8, cursor: 'pointer',
+              border: format === f.key ? '1px solid var(--accent)' : '1px solid var(--border)',
+              background: format === f.key ? 'rgba(47,129,247,.1)' : 'transparent',
+              textAlign: 'left',
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 600,
+                color: format === f.key ? 'var(--accent)' : 'var(--text)',
+                fontFamily: 'var(--font-mono)', marginBottom: 4 }}>
+                {f.label}
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--muted)' }}>{f.desc}</div>
             </button>
           ))}
         </div>
       </Card>
 
-      {/* Dataset selection */}
+      {/* Dataset */}
       <Card>
-        <h3 className="text-sm font-semibold text-slate-700 mb-3">Dataset</h3>
-        <div className="space-y-2">
+        <SectionTitle>Dataset</SectionTitle>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           {DATASETS.map(d => (
-            <button key={d.key} onClick={() => setDataset(d.key)}
-              className={`w-full p-3 rounded-lg border text-left flex items-center gap-3 transition ${
-                dataset === d.key ? 'border-blue-500 bg-blue-50' : 'border-slate-100 hover:border-slate-200'
-              }`}>
-              <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${
-                dataset === d.key ? 'border-blue-500' : 'border-slate-300'
-              }`}>
-                {dataset === d.key && <div className="w-2 h-2 rounded-full bg-blue-500" />}
+            <button key={d.key} onClick={() => setDataset(d.key)} style={{
+              display: 'flex', alignItems: 'center', gap: 12,
+              padding: '10px 14px', borderRadius: 6, cursor: 'pointer',
+              border: dataset === d.key ? '1px solid var(--accent)' : '1px solid var(--border)',
+              background: dataset === d.key ? 'rgba(47,129,247,.07)' : 'transparent',
+              textAlign: 'left',
+            }}>
+              <div style={{
+                width: 14, height: 14, borderRadius: '50%', flexShrink: 0,
+                border: `2px solid ${dataset === d.key ? 'var(--accent)' : 'var(--border2)'}`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                {dataset === d.key && (
+                  <div style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent)' }} />
+                )}
               </div>
               <div>
-                <p className="text-sm font-medium text-slate-700">{d.label}</p>
-                <p className="text-[10px] text-slate-500">{d.desc}</p>
+                <div style={{ fontSize: 12, fontWeight: 500, color: 'var(--text)', marginBottom: 2 }}>
+                  {d.label}
+                </div>
+                <div style={{ fontSize: 10, color: 'var(--muted)' }}>{d.desc}</div>
               </div>
             </button>
           ))}
         </div>
       </Card>
 
-      {/* Current parameters summary */}
-      <Card className="bg-slate-50">
-        <h3 className="text-sm font-semibold text-slate-700 mb-2">Export Parameters</h3>
-        <div className="grid grid-cols-4 gap-2 text-xs text-slate-600">
-          <div><span className="text-slate-400">β:</span> {geo.beta}°</div>
-          <div><span className="text-slate-400">c':</span> {geo.c_prime} Pa</div>
-          <div><span className="text-slate-400">φ':</span> {geo.phi_prime}°</div>
-          <div><span className="text-slate-400">γ:</span> {geo.gamma} N/m³</div>
+      {/* Parameter summary */}
+      <Card style={{ background: 'rgba(255,255,255,.02)' }}>
+        <SectionTitle>Grid parameters</SectionTitle>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8,
+          fontSize: 11, fontFamily: 'var(--font-mono)' }}>
+          {[
+            ['z range', `0.5 – 40 m,  50 pts`],
+            ['t range', `0 – ${tMax} d,  50 pts`],
+            ['β',       `${geo.beta}°`],
+            ["c′",      `${geo.c_prime} kPa`],
+          ].map(([k, v]) => (
+            <div key={k} style={{ padding: '6px 10px', background: 'var(--border)',
+              borderRadius: 5 }}>
+              <div style={{ color: 'var(--muted)', fontSize: 9, marginBottom: 2 }}>{k}</div>
+              <div style={{ color: 'var(--text)' }}>{v}</div>
+            </div>
+          ))}
         </div>
       </Card>
 
       {/* Export button */}
-      <div className="flex items-center gap-4">
-        <button onClick={handleExport} disabled={loading}
-          className="px-8 py-3 bg-blue-600 text-white rounded-xl text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 transition shadow-lg shadow-blue-200">
-          {loading ? (
-            <span className="flex items-center gap-2"><Spinner /> Exporting…</span>
-          ) : (
-            `📤 Export ${DATASETS.find(d => d.key === dataset)?.label} as ${format.toUpperCase()}`
-          )}
-        </button>
-
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        <Button onClick={handleExport} disabled={loading} variant="primary"
+          style={{ padding: '10px 28px', fontSize: 13 }}>
+          {loading ? 'Exporting…' : `Export ${DATASETS.find(d => d.key === dataset)?.label} → ${format.toUpperCase()}`}
+        </Button>
         {status && (
-          <div className={`text-sm font-medium ${status.type === 'success' ? 'text-green-600' : 'text-red-600'}`}>
-            {status.type === 'success' ? '✅' : '❌'} {status.msg}
-          </div>
+          <span style={{ fontSize: 12,
+            color: status.ok ? 'var(--accent-2)' : 'var(--danger)' }}>
+            {status.ok ? '✓' : '✗'} {status.msg}
+          </span>
         )}
       </div>
     </div>
