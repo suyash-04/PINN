@@ -512,19 +512,85 @@ class SlopeFailurePredictor:
             plt.show()
 
 
-# =============================================================================
-# Entry point — pass your rainfall CSV as a command-line argument
-# =============================================================================
+def convert_rainfall_csv(
+        rainfall_m_hr_csv: str | Path,
+        t_min: float = 1000.0,
+        t_max: float = 1500.0,
+        output_path: str | Path = "artifacts/dataset/rainfall_mm_hr.csv",
+) -> str:
+    """
+    Convert a rainfall CSV from m/hr to mm/hr and filter to a time window.
+
+    Parameters
+    ----------
+    rainfall_m_hr_csv : str | Path
+        Input CSV with columns t_hours and Rain_m_hr (units: m/hr).
+    t_min : float
+        Start of time window in simulation hours (default 1000).
+    t_max : float
+        End of time window in simulation hours (default 1500).
+    output_path : str | Path
+        Where to save the converted CSV.
+
+    Returns
+    -------
+    str — path to the saved CSV (pass directly to predict_from_csv).
+    """
+    df = pd.read_csv(rainfall_m_hr_csv)
+
+    # Rename columns to standard names
+    col_map = {}
+    for col in df.columns:
+        lc = col.strip().lower()
+        if lc in ('t', 'time', 't_hours', 'time_hr', 'time_hours', 'hour'):
+            col_map[col] = 't'
+        elif 'm_hr' in lc or 'rain' in lc or 'precip' in lc:
+            col_map[col] = 'rainfall_m_hr'
+    df = df.rename(columns=col_map)
+
+    if 't' not in df.columns or 'rainfall_m_hr' not in df.columns:
+        raise ValueError(
+            f"Could not find time and rainfall columns.\n"
+            f"Found: {list(df.columns)}"
+        )
+
+    # Filter to time window
+    df = df[(df['t'] >= t_min) & (df['t'] <= t_max)].copy()
+
+    if len(df) == 0:
+        raise ValueError(
+            f"No rows found between t={t_min} and t={t_max}."
+        )
+
+    # Convert m/hr -> mm/hr
+    df['rainfall'] = df['rainfall_m_hr'] * 1000.0
+    df = df[['t', 'rainfall']].reset_index(drop=True)
+
+    # Save
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(output_path, index=False)
+
+    print(f"[Predictor] Rainfall converted  m/hr \u2192 mm/hr")
+    print(f"            window   : t={df['t'].min():.0f} to t={df['t'].max():.0f} hr  "
+          f"({len(df)} rows)")
+    print(f"            range    : {df['rainfall'].min():.3f} to "
+          f"{df['rainfall'].max():.3f} mm/hr")
+    print(f"            saved \u2192  {output_path}")
+
+    return str(output_path)
+
 
 def run(rainfall_csv: str, z_min: float = 0.1, z_max: float = 55.0,
         n_depths: int = 100, output_dir: str = "artifacts/results"):
     """
-    Run the predictor from a rainfall CSV file.
+    Run the predictor from a rainfall CSV file (m/hr or mm/hr).
 
     Parameters
     ----------
     rainfall_csv : str
-        Path to CSV with columns `t` (simulation hour) and `rainfall` (mm/hr).
+        Path to CSV with columns t_hours and Rain_m_hr (m/hr).
+        Automatically converted to mm/hr and filtered to t=1000-1500.
     z_min : float
         Shallowest depth to query in metres.
     z_max : float
@@ -534,48 +600,42 @@ def run(rainfall_csv: str, z_min: float = 0.1, z_max: float = 55.0,
     output_dir : str
         Directory where predictions.csv and prediction_plots.png are saved.
     """
-    predictor = SlopeFailurePredictor()
+    # Convert m/hr -> mm/hr, filter to t=1000-1500
+    converted_csv = convert_rainfall_csv(
+        rainfall_m_hr_csv = rainfall_csv,
+        t_min             = 1000.0,
+        t_max             = 1500.0,
+        output_path       = f"{output_dir}/rainfall_mm_hr.csv",
+    )
 
-    z_values = np.linspace(z_min, z_max, n_depths)
+    predictor = SlopeFailurePredictor()
+    z_values  = np.linspace(z_min, z_max, n_depths)
 
     results = predictor.predict_from_csv(
-        rainfall_csv = rainfall_csv,
+        rainfall_csv = converted_csv,
         z_values     = z_values,
     )
 
     create_directories([output_dir])
-
     predictor.print_report(results)
 
     df = predictor.to_dataframe(results)
     csv_out = f"{output_dir}/predictions.csv"
     df.to_csv(csv_out, index=False)
-    print(f"[Predictor] Results saved → {csv_out}")
+    print(f"[Predictor] Results saved \u2192 {csv_out}")
 
     plot_out = f"{output_dir}/prediction_plots.png"
     predictor.plot_results(results, save_path=plot_out)
 
     return results
 
-
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) < 2:
-        print("Usage: python predictor.py <path/to/rainfall.csv> [z_min] [z_max] [n_depths]")
-        print()
-        print("Example:")
-        print("  python predictor.py data/forecast_7days.csv 0.1 55.0 100")
-        print()
-        print("CSV format:")
-        print("  t,rainfall")
-        print("  1155,0.0")
-        print("  1156,2.3")
-        print("  1157,5.1")
-        sys.exit(1)
+    
 
-    csv_path  = sys.argv[1]
-    z_min_arg = float(sys.argv[2]) if len(sys.argv) > 2 else 0.1
-    z_max_arg = float(sys.argv[3]) if len(sys.argv) > 3 else 55.0
-    n_dep_arg = int(sys.argv[4])   if len(sys.argv) > 4 else 100
+    csv_path  = ('dataset/hourly_rainfall.csv')   
+    z_min_arg =  0.1
+    z_max_arg =  55.0
+    n_dep_arg =  100
 
     run(csv_path, z_min_arg, z_max_arg, n_dep_arg)
